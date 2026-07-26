@@ -203,8 +203,8 @@ def _sheet_goal(wb, goal: dict):
     _autofit(sheet, [18, 24])
 
 
-def _sheet_candidate_watchlist(wb, candidates: list[dict]):
-    sheet = wb.create_sheet("潛力新標的觀察")
+def _sheet_candidate_watchlist(wb, candidates: list[dict], sheet_name: str = "潛力新標的觀察"):
+    sheet = wb.create_sheet(sheet_name)
     headers = ["價位帶", "代號", "名稱", "股價", "信心星等", "Investment Score", "Risk Score", "資料覆蓋率", "法人目標價", "關鍵理由"]
     _write_header(sheet, 1, headers)
     tier_label = {"high": "高價股", "low": "低價股"}
@@ -284,6 +284,7 @@ def generate_excel_report(path: str = EXCEL_REPORT_PATH, holdings=None, ctx=None
     _sheet_text_list(wb, "追蹤重點", ctx["monthly_focus"], header="每月追蹤重點")
     _sheet_market_intel(wb, holdings, ctx.get("market_intel", {}))
     _sheet_candidate_watchlist(wb, ctx.get("candidate_watchlist", []))
+    _sheet_candidate_watchlist(wb, ctx.get("candidate_watchlist_etf", []), sheet_name="潛力新標的觀察(ETF)")
 
     disclaimer_sheet = wb["追蹤重點"]
     last_row = disclaimer_sheet.max_row + 2

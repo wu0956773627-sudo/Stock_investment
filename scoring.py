@@ -395,6 +395,109 @@ def add_on_conditions_met(h: Holding, intel: dict, tech: dict, fundamentals_scor
     return True
 
 
+# ── ETF 專屬品質評分（規模／費用率／配息政策 45%） ─────────────────────────────
+# ETF 完全沒有 ROE、月營收年增率、三大法人買賣超這些個股才有的資料，套用個股的六構面評分
+# （score_fundamentals/score_growth/score_chips）只會讓基本面/成長性/籌碼面三個構面幾乎全是
+# None，最後分數幾乎只剩技術面在撐，不是真正反映「這檔 ETF 體質好不好」。改用 ETF 自己的
+# 公開可靠指標：基金規模（越大越具規模經濟、流動性越好）、年化費用率（越低對長期持有人越有利）、
+# 配息政策（'distributing'／'accumulating'／None，純文字分類，不是量化穩定度分數——實測發現
+# 官方配息資料集每次只能抓到最新一個月的快照，沒辦法回推變異係數算穩定度，見 etf_fund_data.py）。
+
+
+def score_fund_quality(fund_metrics: dict) -> tuple[float | None, float, list[str]]:
+    aum = fund_metrics.get("aum")
+    expense_ratio = fund_metrics.get("expense_ratio")
+    policy = fund_metrics.get("dividend_policy")
+
+    # 規模差異量級很大（小型 ETF 約幾億元 vs 0050 約 2.2 兆元），比照 score_conviction 對市值的
+    # 處理方式，取 log10 後再線性映射，避免大規模 ETF 全部被硬壓在同一個滿分區間看不出差異。
+    aum_log = math.log10(aum) if aum and aum > 0 else None
+    # 使用者是「薪資現金流投資人」，配息型 ETF 較貼合其現金流需求，給予比累積型略高的分數；
+    # 累積型不是「品質差」，只是投資風格不同，兩者都給及格以上分數，差距刻意不拉大。
+    policy_score = {"distributing": 70.0, "accumulating": 50.0}.get(policy)
+
+    items = [
+        (_linear(aum_log, 8.5, 12.0), 1.5),          # 約 3億～1兆元
+        (_linear(expense_ratio, 0.012, 0.0015), 1.5),  # 年化費用率 1.2%(差)～0.15%(優)，反向映射
+        (policy_score, 1.0),
+    ]
+    score, coverage = _weighted_avg(items)
+
+    reasons = []
+    if aum is not None:
+        reasons.append(f"基金規模約 {aum / 1e8:,.0f} 億元")
+    if expense_ratio is not None:
+        reasons.append(f"年化費用率約 {expense_ratio:.2%}")
+    if policy == "distributing":
+        reasons.append("配息政策：定期配息")
+    elif policy == "accumulating":
+        reasons.append("配息政策：收益併入淨值，不配息")
+    return score, coverage, reasons
+
+
+def evaluate_etf_candidate(
+    h: Holding,
+    fund_metrics: dict,
+    tech: dict,
+    all_candidates: list[Holding],
+    total_value: float,
+    sector_weight: float,
+) -> dict:
+    """評估「目前沒有持有」的 ETF 候選新標的。跟個股版 `evaluate_candidate()` 走同樣的流程與
+    回傳 dict key（code/name/price/investment_score/risk_score/data_coverage/fair_value/
+    target_price/chase_high_distance/conviction_score/conviction_stars/conviction_reasons/
+    reasons），讓 report.py／pdf_report.py／excel_report.py／app.py 不需要為了欄位差異
+    另外改渲染邏輯，但六構面組成換成 ETF 適用的版本：
+    規模/費用率/配息政策 50% + 技術面 30% + 市場環境 15% + 估值 5%
+    （估值只用法人目標價，ETF 通常無分析師覆蓋，缺資料就自動跳過，不強行估算）。
+    這組權重方向沿用 plan 給的「45/25/10/5」，因為 45+25+10+5=85 並非剛好等於 100，
+    這裡依實際四項的相對比重等比例縮放到合計 100%。
+
+    ETF 沒有個股式「長期持股信心」的獨立資料來源（ROE／毛利率／負債比這些個股財報項目），
+    這裡直接沿用 `score_fund_quality()` 的分數與理由當作 conviction_score——對 ETF 而言，
+    「基金體質好不好（規模/費用率/配息）」本來就等同於「值不值得長期持有」，沒有必要另外
+    發明一套指標。
+    """
+    fund_score, fund_cov, fund_reasons = score_fund_quality(fund_metrics)
+    tech_score, tech_cov, tech_reasons = score_technicals(tech)
+    env_score = fund_metrics.get("environment_score")
+    val_score = _linear(h.upside_to_target, -0.20, 0.40)
+    val_cov = 1.0 if val_score is not None else 0.0
+
+    category_items = [
+        (fund_score, 0.50), (tech_score, 0.30), (env_score, 0.15), (val_score, 0.05),
+    ]
+    investment_score, _present = _weighted_avg(category_items)
+    coverage_items = [
+        (fund_cov, 0.50), (tech_cov, 0.30), (1.0 if env_score is not None else 0.0, 0.15), (val_cov, 0.05),
+    ]
+    data_coverage = sum(cov * w for cov, w in coverage_items)
+    risk_score = score_risk(h, {}, tech, total_value, sector_weight)
+
+    fair_value = estimate_fair_value(h)
+    chase_high_distance = None
+    if fair_value and h.price is not None:
+        distance = h.price / fair_value - 1
+        if distance >= CHASE_HIGH_THRESHOLD:
+            chase_high_distance = distance
+
+    return {
+        "code": h.code,
+        "name": h.name,
+        "price": h.price,
+        "investment_score": investment_score,
+        "risk_score": risk_score,
+        "data_coverage": data_coverage,
+        "fair_value": fair_value,
+        "target_price": h.target_mean_price,
+        "chase_high_distance": chase_high_distance,
+        "conviction_score": fund_score,
+        "conviction_stars": conviction_stars(fund_score),
+        "conviction_reasons": fund_reasons,
+        "reasons": (fund_reasons + tech_reasons)[:4],
+    }
+
+
 # ── 候選新標的評估（目前沒有持有，不套用 decide_signal 的持倉判斷） ─────────────────────────────
 
 

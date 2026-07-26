@@ -260,6 +260,16 @@ def generate_investment_report(holdings=None, ctx=None) -> str:
     lines.extend(_candidate_watchlist_section(ctx.get("candidate_watchlist", [])))
     lines.append("")
 
+    lines.append("**潛力新標的觀察（ETF）**\n")
+    lines.append(
+        "*ETF 不套用個股的基本面/成長性/籌碼面評分（ETF 沒有這些資料），改用 ETF 專屬指標："
+        "規模/費用率/配息政策50%＋技術面30%＋市場環境15%＋估值5%（法人目標價，ETF通常無資料，"
+        "缺就跳過）。候選池已排除槓桿反向型（正2/反1）與期貨型，僅收長期持有導向的市值型／"
+        "高股息型／產業主題型 ETF。*\n"
+    )
+    lines.extend(_candidate_watchlist_section(ctx.get("candidate_watchlist_etf", [])))
+    lines.append("")
+
     lines.append("---")
     lines.append(f"*{DISCLAIMER}*")
 

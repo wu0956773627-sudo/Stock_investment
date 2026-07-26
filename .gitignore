@@ -35,6 +35,9 @@ alert_state.json
 # 太太短線輪動預測的事後驗證記錄，屬個人使用記錄，不上傳
 rotation_predictions.json
 
+# ETF 觀察名單品質追蹤的事後驗證記錄，屬個人使用記錄，不上傳
+etf_recommendations.json
+
 # 暫存/除錯輸出
 verify_output.txt
 _test_report.xlsx

@@ -7,8 +7,18 @@ from fastapi.responses import HTMLResponse
 
 from portfolio import load_portfolio, enrich_with_market_data, build_report_context, weight, cost_weight
 from report import DISCLAIMER
+from sector_rotation import HTML_NAME_COLOR, HTML_CODE_COLOR
 
 app = FastAPI(title="AI 投資顧問 v1.0")
+
+
+def _name_code_html(code: str, name: str) -> str:
+    """股票/ETF 名稱／代號配色，套用跟太太短線輪動信（sector_rotation.py）一致的規格：
+    名稱玫瑰紅、代號寶藍，都是粗體，方便在一堆數字中快速抓到重點標的。"""
+    return (
+        f'<span style="color:{HTML_NAME_COLOR};font-weight:700;">{html.escape(name)}</span>'
+        f'（<span style="color:{HTML_CODE_COLOR};font-weight:700;">{html.escape(code)}</span>）'
+    )
 
 
 def render_report_html() -> str:
@@ -78,7 +88,7 @@ def render_report_html() -> str:
         reasons_str = "；".join(r.get("reasons") or [])
         ai_scoring_blocks += f"""
         <div style="margin-bottom:0.8rem;">
-          <strong>{star}{r['signal']} {h.code} {h.name}</strong>：{html.escape(r['label'])}
+          <strong>{star}{r['signal']}</strong> {_name_code_html(h.code, h.name)}：{html.escape(r['label'])}
           <span style="color:#888;">（Investment Score {score_str}／Risk Score {risk_str}{target_str}）</span>
           {"<p style='color:#666;font-size:0.9rem;margin:2px 0 0 0;'>關鍵理由：" + html.escape(reasons_str) + "</p>" if reasons_str else ""}
         </div>"""
@@ -125,7 +135,7 @@ def render_report_html() -> str:
 
         market_intel_blocks += f"""
         <div style="margin-bottom:1rem;">
-          <strong>{h.code} {h.name}</strong>
+          {_name_code_html(h.code, h.name)}
           {"<p>" + "，".join(summary_parts) + "</p>" if summary_parts else ""}
           <ul>{news_items}</ul>
         </div>"""
@@ -146,29 +156,33 @@ def render_report_html() -> str:
         進度評估：<span style="color:{pace_color}">{pace_str}</span></p>
         <p>下限檢查：<span style="color:{floor_color}">{floor_str}</span>（目前總市值 {goal['current_value']:,.0f}）</p>"""
 
-    candidate_watchlist = ctx.get("candidate_watchlist", [])
     tier_label = {"high": "高價股", "low": "低價股"}
-    candidate_blocks = ""
-    if not candidate_watchlist:
-        candidate_blocks = "<p>目前抓不到候選新標的資料，或候選池股票都已在你的持股中。</p>"
-    else:
+
+    def _render_candidate_blocks(candidates: list[dict]) -> str:
+        if not candidates:
+            return "<p>目前抓不到候選新標的資料，或候選池股票都已在你的持股中。</p>"
+        blocks = ""
         for tier in ("high", "low"):
-            group = [r for r in candidate_watchlist if r.get("price_tier") == tier]
+            group = [r for r in candidates if r.get("price_tier") == tier]
             if not group:
                 continue
-            candidate_blocks += f"<p><strong>{tier_label[tier]}</strong></p>"
+            blocks += f"<p><strong>{tier_label[tier]}</strong></p>"
             for r in group:
                 score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
                 risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
                 target_str = f"／法人目標價 {r['target_price']:,.1f}" if r.get("target_price") is not None else ""
                 reasons_str = "；".join(r.get("reasons") or [])
-                candidate_blocks += f"""
+                blocks += f"""
                 <div style="margin-bottom:0.8rem;">
-                  <strong>{html.escape(r.get('conviction_stars') or '')} {r['code']} {r['name']}</strong>
+                  <strong>{html.escape(r.get('conviction_stars') or '')}</strong> {_name_code_html(r['code'], r['name'])}
                   股價 {r['price']:,.1f}
                   <span style="color:#888;">（Investment Score {score_str}／Risk Score {risk_str}{target_str}）</span>
                   {"<p style='color:#666;font-size:0.9rem;margin:2px 0 0 0;'>關鍵理由：" + html.escape(reasons_str) + "</p>" if reasons_str else ""}
                 </div>"""
+        return blocks
+
+    candidate_blocks = _render_candidate_blocks(ctx.get("candidate_watchlist", []))
+    candidate_blocks_etf = _render_candidate_blocks(ctx.get("candidate_watchlist_etf", []))
 
     return f"""
     <html>
@@ -247,6 +261,13 @@ def render_report_html() -> str:
         依 Investment Score 分「高價股」「低價股」各挑出評分最高的幾檔，僅供觀察參考，非買進建議。
       </p>
       {candidate_blocks}
+
+      <p><strong>潛力新標的觀察（ETF）</strong></p>
+      <p style="color:#888;font-size:0.85rem;">
+        ETF 不套用個股的基本面/成長性/籌碼面評分，改用規模/費用率/配息政策50%＋技術面30%＋市場環境15%＋估值5%，
+        候選池已排除槓桿反向型（正2/反1）與期貨型，僅收長期持有導向的市值型／高股息型／產業主題型 ETF。
+      </p>
+      {candidate_blocks_etf}
 
       <footer>{DISCLAIMER}</footer>
     </body>

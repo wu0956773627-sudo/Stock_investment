@@ -345,6 +345,17 @@ def build_pdf_flowables(holdings, ctx: dict) -> list:
     )
     flow.extend(_candidate_watchlist_flowables(ctx.get("candidate_watchlist", [])))
 
+    flow.append(_p("潛力新標的觀察（ETF）", STYLE_H2))
+    flow.append(
+        _p(
+            "ETF 不套用個股的基本面/成長性/籌碼面評分，改用規模/費用率/配息政策50%＋技術面30%"
+            "＋市場環境15%＋估值5%。候選池已排除槓桿反向型（正2/反1）與期貨型，僅收長期持有"
+            "導向的市值型／高股息型／產業主題型 ETF，僅供觀察參考，非買進建議。",
+            STYLE_SMALL,
+        )
+    )
+    flow.extend(_candidate_watchlist_flowables(ctx.get("candidate_watchlist_etf", [])))
+
     flow.append(Spacer(1, 16))
     flow.append(
         _p(

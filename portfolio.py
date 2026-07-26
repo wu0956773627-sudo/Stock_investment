@@ -526,12 +526,13 @@ def build_report_context(holdings: list[Holding], include_market_intel: bool = T
     market_index = None
     ai_scoring = {}
     candidate_watchlist = []
+    candidate_watchlist_etf = []
     if include_market_intel:
         from market_data import build_market_intel, fetch_market_index
         from technicals import build_technicals_map
         from market_environment import fetch_market_environment, compute_environment_score
         from scoring import build_scoring_context
-        from candidate_watchlist import evaluate_candidates
+        from candidate_watchlist import evaluate_candidates, evaluate_etf_candidates
 
         market_intel = build_market_intel(holdings)
         market_index = fetch_market_index()
@@ -539,6 +540,7 @@ def build_report_context(holdings: list[Holding], include_market_intel: bool = T
         environment_score = compute_environment_score(fetch_market_environment())
         ai_scoring = build_scoring_context(holdings, market_intel, technicals_map, environment_score)
         candidate_watchlist = evaluate_candidates(holdings, environment_score)
+        candidate_watchlist_etf = evaluate_etf_candidates(holdings, environment_score)
 
     cash_flow_balance = load_cash_flow_balance()
 
@@ -565,6 +567,7 @@ def build_report_context(holdings: list[Holding], include_market_intel: bool = T
         "investment_horizon": INVESTMENT_HORIZON,
         "cash_flow_balance": cash_flow_balance,
         "candidate_watchlist": candidate_watchlist,
+        "candidate_watchlist_etf": candidate_watchlist_etf,
     }
 
 
