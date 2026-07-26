@@ -291,9 +291,61 @@ def _format_stock_html(r: dict) -> str:
     )
 
 
+# ── 表格化呈現（HTML Email 版用，取代原本一行一筆的條列格式） ─────────────────────────────
+HTML_TABLE_HEAD_BG = "#1a3d6d"
+HTML_TABLE_GRID = "#d0d7e2"
+HTML_PNL_GREEN = "#2f9e44"  # 損益為負：綠（台股慣例紅漲綠跌，紅=正向已用 HTML_SELL_ZONE_COLOR）
+
+_TABLE_COLUMNS = ["輪動排名", "輪動類別", "股票名稱", "股票代號", "股價", "買入區間", "獲利了結區間", "損益", "預估天數", "備註"]
+
+
+def _table_row_html(r: dict) -> str:
+    rank_str = str(r["rank"]) if r.get("rank") is not None else "－"
+    group_str = r.get("group") or "－"
+    return_str = f"約+{r['potential_return_pct']:.1%}" if r["potential_return_pct"] is not None else "N/A"
+    return_color = HTML_SELL_ZONE_COLOR if (r["potential_return_pct"] or 0) >= 0 else HTML_PNL_GREEN
+    caution = r.get("caution_note") or ""
+
+    cells = [
+        rank_str,
+        group_str,
+        f'<span style="color:{HTML_NAME_COLOR};font-weight:700;">{r["name"]}</span>',
+        f'<span style="color:{HTML_CODE_COLOR};font-weight:700;">{r["code"]}</span>',
+        f'{r["price"]:.1f}',
+        f'{r["buy_zone"][0]:.1f}~{r["buy_zone"][1]:.1f}',
+        f'<span style="color:{HTML_SELL_ZONE_COLOR};font-weight:900;">約{r["sell_zone"]:.1f}</span>',
+        f'<span style="color:{return_color};font-weight:900;">{return_str}</span>',
+        f'約{r["estimated_days"]}天',
+        f'<span style="color:#e8590c;">⚠{caution}</span>' if caution else "－",
+    ]
+    tds = "".join(
+        f'<td style="padding:6px 8px;border:1px solid {HTML_TABLE_GRID};'
+        f'font-size:{HTML_BASE_FONT_PX}px;white-space:nowrap;">{c}</td>'
+        for c in cells
+    )
+    return f"<tr>{tds}</tr>"
+
+
+def _rotation_table_html(rows: list[dict]) -> str:
+    header = "".join(
+        f'<th style="padding:6px 8px;border:1px solid {HTML_TABLE_GRID};'
+        f'background:{HTML_TABLE_HEAD_BG};color:#ffffff;font-size:{HTML_BASE_FONT_PX}px;'
+        f'white-space:nowrap;">{c}</th>'
+        for c in _TABLE_COLUMNS
+    )
+    body = "".join(_table_row_html(r) for r in rows)
+    return (
+        '<table style="border-collapse:collapse;margin:8px 0;">'
+        f'<tr>{header}</tr>{body}</table>'
+    )
+
+
 def build_report_html(recommendations: list[dict], top_stocks_by_price: list[dict] | None = None) -> str:
-    """跟 build_report_text() 內容相同，但股票名稱／代號分別用醒目對比色標示，
-    字體全面加大（14.5~16px 以上），供 Email HTML 版使用（純文字版仍保留當備援）。
+    """跟 build_report_text() 內容相同，改用實際 HTML `<table>` 表格化呈現（取代逐行條列），
+    欄位：輪動排名／輪動類別／股票名稱／股票代號／股價／買入區間／獲利了結區間／損益／
+    預估天數／備註（RSI偏熱或量能不足的提醒，沒有就顯示「－」）。股票名稱／代號沿用醒目對比色，
+    字體全面加大（14.5~16px 以上），供 Email HTML 版使用（純文字版 `build_report_text()` 仍
+    保留條列格式當備援，收信端不支援 HTML 時顯示）。
     """
     parts = [
         '<div style="font-family:\'Microsoft JhengHei\',Arial,sans-serif;'
@@ -305,24 +357,14 @@ def build_report_html(recommendations: list[dict], top_stocks_by_price: list[dic
     if not recommendations:
         parts.append(f'<div style="font-size:{HTML_BASE_FONT_PX}px;">目前watchlist資料不足或無明顯輪動族群，暫無建議標的。</div>')
     else:
-        current_rank = None
-        for r in recommendations:
-            if r["rank"] != current_rank:
-                current_rank = r["rank"]
-                parts.append(
-                    f'<div style="font-size:{HTML_HEADER_FONT_PX}px;font-weight:700;margin:14px 0 4px;">'
-                    f'■ 輪動排名{r["rank"]}：{r["group"]}</div>'
-                )
-            parts.append(_format_stock_html(r))
+        parts.append(f'<div style="overflow-x:auto;">{_rotation_table_html(recommendations)}</div>')
 
     if top_stocks_by_price:
         parts.append(
             f'<div style="font-size:{HTML_HEADER_FONT_PX}px;font-weight:700;margin:18px 0 4px;">'
             '■ 個股動能 Top5（依股價單價由低到高排序，方便比較好入手的標的）</div>'
         )
-        for r in top_stocks_by_price:
-            group_note = f'　所屬族群：{r["group"]}' if r.get("group") else ""
-            parts.append(_format_stock_html(r).replace("</div>", f"{group_note}</div>"))
+        parts.append(f'<div style="overflow-x:auto;">{_rotation_table_html(top_stocks_by_price)}</div>')
 
     parts.append(
         f'<div style="font-size:14.5px;color:#495057;margin-top:16px;">{DISCLAIMER}</div>'
