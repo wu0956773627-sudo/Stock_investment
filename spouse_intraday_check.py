@@ -15,7 +15,12 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from sector_rotation import scan_sector_rotation, build_recommendations
+from sector_rotation import (
+    scan_sector_rotation,
+    build_recommendations,
+    HTML_TABLE_GRID,
+    wrap_html_document,
+)
 import microstructure
 import notify
 
@@ -78,8 +83,30 @@ def build_intraday_text(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _intraday_card_html(r: dict) -> str:
+    """每檔股票一張卡片（純 `<div>` 堆疊，不用 `<table>`）。跟 sector_rotation._format_stock_html()
+    同一套做法——`<table>` + overflow-x:auto 橫向捲動、`<table>` + media query 響應式卡片化
+    兩種都實測過，手機版 Gmail App 會把超出螢幕寬度的欄位直接裁掉，只有純 `<div>` 堆疊能保證
+    不會裁切。"""
+    premium_str = f"{r['premium']:+.1%}" if r["premium"] is not None else "N/A"
+    flags_html = "".join(f'<div style="margin-top:2px;">・{flag}</div>' for flag in r["flags"]) if r["flags"] else '<div style="margin-top:2px;">・目前無特別訊號</div>'
+
+    return (
+        f'<div style="border:1px solid {HTML_TABLE_GRID};border-radius:8px;'
+        f'padding:8px 10px;margin:8px 0;font-size:{HTML_BASE_FONT_PX}px;line-height:1.6;">'
+        f'<div style="margin-bottom:3px;">'
+        f'<span style="color:{HTML_NAME_COLOR};font-weight:700;font-size:{HTML_STOCK_FONT_PX}px;">{r["name"]}</span>'
+        f'（<span style="color:{HTML_CODE_COLOR};font-weight:700;font-size:{HTML_STOCK_FONT_PX}px;">{r["code"]}</span>）'
+        f'</div>'
+        f'<div>開盤溢價：{premium_str}　盤中強弱分數：{r["score"]:.0f}/100</div>'
+        f'{flags_html}'
+        f'</div>'
+    )
+
+
 def build_intraday_html(results: list[dict]) -> str:
-    """跟 build_intraday_text() 內容相同，但股票名稱／代號分別用醒目對比色標示，
+    """跟 build_intraday_text() 內容相同，改用逐檔卡片（`<div>` 堆疊）呈現，跟
+    sector_rotation.build_report_html() 的做法一致，股票名稱／代號沿用醒目對比色，
     字體全面加大（14.5~16px 以上）。"""
     now = datetime.now()
     parts = [
@@ -92,25 +119,11 @@ def build_intraday_html(results: list[dict]) -> str:
     if not results:
         parts.append(f'<div style="font-size:{HTML_BASE_FONT_PX}px;">目前抓不到盤中資料（可能非交易時段或資料尚未更新），暫無更新。</div>')
     else:
-        for r in results:
-            premium_str = f"{r['premium']:+.1%}" if r["premium"] is not None else "N/A"
-            name_code = (
-                f'<span style="color:{HTML_NAME_COLOR};font-weight:700;font-size:{HTML_STOCK_FONT_PX}px;">{r["name"]}</span>'
-                f'（<span style="color:{HTML_CODE_COLOR};font-weight:700;font-size:{HTML_STOCK_FONT_PX}px;">{r["code"]}</span>）'
-            )
-            parts.append(
-                f'<div style="margin:10px 0 2px;font-size:{HTML_BASE_FONT_PX}px;">'
-                f'■ {name_code}　開盤溢價：{premium_str}　盤中強弱分數：{r["score"]:.0f}/100</div>'
-            )
-            if r["flags"]:
-                for flag in r["flags"]:
-                    parts.append(f'<div style="font-size:{HTML_BASE_FONT_PX}px;margin-left:12px;">・{flag}</div>')
-            else:
-                parts.append(f'<div style="font-size:{HTML_BASE_FONT_PX}px;margin-left:12px;">・目前無特別訊號</div>')
+        parts.extend(_intraday_card_html(r) for r in results)
 
     parts.append(f'<div style="font-size:14.5px;color:#495057;margin-top:16px;">{MICRO_DISCLAIMER}</div>')
     parts.append("</div>")
-    return "".join(parts)
+    return wrap_html_document("".join(parts))
 
 
 def main():

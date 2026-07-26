@@ -276,82 +276,47 @@ def _stock_name_code_html(name: str, code: str) -> str:
     )
 
 
-def _format_stock_html(r: dict) -> str:
+def _format_stock_html(r: dict, group_note: str = "") -> str:
+    """每檔股票一張卡片（純 `<div>` 堆疊，不用 `<table>`）。手機版 Gmail App 對 `<table>`
+    橫向捲動、`<style>`/media query 的支援都不可靠（實測過，欄位一樣會被裁掉、卡片化沒生效），
+    改用純區塊元素＋inline style：每個欄位各自一行，畫面不管多窄都只會往下換行，不會裁切或
+    需要橫向捲動，是唯一能保證兩種手機 Email App 都正常顯示的做法。"""
     return_str = f"約+{r['potential_return_pct']:.1%}" if r["potential_return_pct"] is not None else "N/A"
-    caution = f'　<span style="color:#e8590c;">⚠{r["caution_note"]}</span>' if r.get("caution_note") else ""
+    caution = f'<div style="color:#e8590c;margin-top:2px;">⚠{r["caution_note"]}</div>' if r.get("caution_note") else ""
     return (
-        f'<div style="margin:6px 0;font-size:{HTML_BASE_FONT_PX}px;line-height:1.7;">'
-        f'{_stock_name_code_html(r["name"], r["code"])}　股價：{r["price"]:.1f}　'
-        f'買入區間：{r["buy_zone"][0]:.1f}~{r["buy_zone"][1]:.1f}　'
-        f'獲利了結區間：'
-        f'<span style="color:{HTML_SELL_ZONE_COLOR};font-weight:900;font-size:{HTML_STOCK_FONT_PX}px;">約{r["sell_zone"]:.1f}</span>　'
-        f'潛在損益率：{return_str}　'
-        f'預估天數：約{r["estimated_days"]}天{caution}'
+        f'<div style="border:1px solid {HTML_TABLE_GRID};border-radius:8px;'
+        f'padding:8px 10px;margin:8px 0;font-size:{HTML_BASE_FONT_PX}px;line-height:1.6;">'
+        f'<div style="margin-bottom:3px;">{_stock_name_code_html(r["name"], r["code"])}{group_note}</div>'
+        f'<div>股價：{r["price"]:.1f}　買入區間：{r["buy_zone"][0]:.1f}~{r["buy_zone"][1]:.1f}</div>'
+        f'<div>獲利了結區間：'
+        f'<span style="color:{HTML_SELL_ZONE_COLOR};font-weight:900;">約{r["sell_zone"]:.1f}</span>　'
+        f'潛在損益率：{return_str}</div>'
+        f'<div>預估天數：約{r["estimated_days"]}天</div>'
+        f'{caution}'
         f'</div>'
     )
 
 
-# ── 表格化呈現（HTML Email 版用，取代原本一行一筆的條列格式） ─────────────────────────────
-HTML_TABLE_HEAD_BG = "#1a3d6d"
 HTML_TABLE_GRID = "#d0d7e2"
-HTML_PNL_GREEN = "#2f9e44"  # 損益為負：綠（台股慣例紅漲綠跌，紅=正向已用 HTML_SELL_ZONE_COLOR）
-
-# 太太主要在手機上看信：欄位標題盡量簡短，且只有「股價/買入/了結/損益/天數」這類本來就不會
-# 換行的短數字欄位才用 white-space:nowrap；「名稱」「備註」允許換行（備註常是一整句提醒，
-# 如果也 nowrap 會把整張表撐到手機螢幕好幾倍寬，逼所有欄位一起橫向捲動，體驗更差）。
-_TABLE_COLUMNS = ["排名", "族群", "名稱", "代號", "股價", "買入區間", "了結區間", "損益", "天數", "備註"]
-_NOWRAP_COLS = {0, 1, 3, 4, 5, 6, 7, 8}  # 對應 _TABLE_COLUMNS 的索引
+HTML_TABLE_HEAD_BG = "#1a3d6d"  # daily_report.py 的桌面版表格仍在用，不要刪（使用者本人看的報告在電腦螢幕看，維持表格沒問題）
 
 
-def _table_row_html(r: dict) -> str:
-    rank_str = str(r["rank"]) if r.get("rank") is not None else "－"
-    group_str = r.get("group") or "－"
-    return_str = f"約+{r['potential_return_pct']:.1%}" if r["potential_return_pct"] is not None else "N/A"
-    return_color = HTML_SELL_ZONE_COLOR if (r["potential_return_pct"] or 0) >= 0 else HTML_PNL_GREEN
-    caution = r.get("caution_note") or ""
-
-    cells = [
-        rank_str,
-        group_str,
-        f'<span style="color:{HTML_NAME_COLOR};font-weight:700;">{r["name"]}</span>',
-        f'<span style="color:{HTML_CODE_COLOR};font-weight:700;">{r["code"]}</span>',
-        f'{r["price"]:.1f}',
-        f'{r["buy_zone"][0]:.1f}~{r["buy_zone"][1]:.1f}',
-        f'<span style="color:{HTML_SELL_ZONE_COLOR};font-weight:900;">約{r["sell_zone"]:.1f}</span>',
-        f'<span style="color:{return_color};font-weight:900;">{return_str}</span>',
-        f'約{r["estimated_days"]}天',
-        f'<span style="color:#e8590c;">⚠{caution}</span>' if caution else "－",
-    ]
-    tds = "".join(
-        f'<td style="padding:5px 7px;border:1px solid {HTML_TABLE_GRID};'
-        f'font-size:{HTML_BASE_FONT_PX}px;'
-        + ("white-space:nowrap;" if i in _NOWRAP_COLS else "max-width:150px;")
-        + f'">{c}</td>'
-        for i, c in enumerate(cells)
-    )
-    return f"<tr>{tds}</tr>"
-
-
-def _rotation_table_html(rows: list[dict]) -> str:
-    header = "".join(
-        f'<th style="padding:6px 8px;border:1px solid {HTML_TABLE_GRID};'
-        f'background:{HTML_TABLE_HEAD_BG};color:#ffffff;font-size:{HTML_BASE_FONT_PX}px;'
-        f'white-space:nowrap;">{c}</th>'
-        for c in _TABLE_COLUMNS
-    )
-    body = "".join(_table_row_html(r) for r in rows)
+def wrap_html_document(inner_html: str) -> str:
+    """把內文包成完整 HTML 文件（含 <meta name="viewport">），確保手機版 Mail App 用裝置實際
+    寬度排版，而不是套用桌面版預設寬視窗。"""
     return (
-        '<table style="border-collapse:collapse;margin:8px 0;">'
-        f'<tr>{header}</tr>{body}</table>'
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"</head><body>{inner_html}</body></html>"
     )
 
 
 def build_report_html(recommendations: list[dict], top_stocks_by_price: list[dict] | None = None) -> str:
-    """跟 build_report_text() 內容相同，改用實際 HTML `<table>` 表格化呈現（取代逐行條列），
-    欄位：輪動排名／輪動類別／股票名稱／股票代號／股價／買入區間／獲利了結區間／損益／
-    預估天數／備註（RSI偏熱或量能不足的提醒，沒有就顯示「－」）。股票名稱／代號沿用醒目對比色，
-    字體全面加大（14.5~16px 以上），供 Email HTML 版使用（純文字版 `build_report_text()` 仍
-    保留條列格式當備援，收信端不支援 HTML 時顯示）。
+    """跟 build_report_text() 內容相同，改用逐檔卡片（`<div>` 堆疊，不用 `<table>`）呈現，
+    股票名稱／代號沿用醒目對比色，字體全面加大（14.5~16px 以上）。**不要改回 `<table>`**：
+    先前試過 `<table>` + `overflow-x:auto` 橫向捲動、`<table>` + media query 響應式卡片化
+    兩種做法，手機版 Gmail App 實測都會把超出螢幕寬度的欄位直接裁掉、資料看不到，
+    純 `<div>` 堆疊才是唯一能保證兩種手機 Email App 都正常顯示、不會裁切的做法。
     """
     parts = [
         '<div style="font-family:\'Microsoft JhengHei\',Arial,sans-serif;'
@@ -363,20 +328,30 @@ def build_report_html(recommendations: list[dict], top_stocks_by_price: list[dic
     if not recommendations:
         parts.append(f'<div style="font-size:{HTML_BASE_FONT_PX}px;">目前watchlist資料不足或無明顯輪動族群，暫無建議標的。</div>')
     else:
-        parts.append(f'<div style="overflow-x:auto;">{_rotation_table_html(recommendations)}</div>')
+        current_rank = None
+        for r in recommendations:
+            if r["rank"] != current_rank:
+                current_rank = r["rank"]
+                parts.append(
+                    f'<div style="font-size:{HTML_BASE_FONT_PX}px;font-weight:700;margin:12px 0 2px;">'
+                    f'■ 輪動排名{r["rank"]}：{r["group"]}</div>'
+                )
+            parts.append(_format_stock_html(r))
 
     if top_stocks_by_price:
         parts.append(
             f'<div style="font-size:{HTML_HEADER_FONT_PX}px;font-weight:700;margin:18px 0 4px;">'
             '■ 個股動能 Top5（依股價單價由低到高排序，方便比較好入手的標的）</div>'
         )
-        parts.append(f'<div style="overflow-x:auto;">{_rotation_table_html(top_stocks_by_price)}</div>')
+        for r in top_stocks_by_price:
+            group_note = f'　所屬族群：{r["group"]}' if r.get("group") else ""
+            parts.append(_format_stock_html(r, group_note=group_note))
 
     parts.append(
         f'<div style="font-size:14.5px;color:#495057;margin-top:16px;">{DISCLAIMER}</div>'
     )
     parts.append("</div>")
-    return "".join(parts)
+    return wrap_html_document("".join(parts))
 
 
 if __name__ == "__main__":
