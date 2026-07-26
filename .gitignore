@@ -1,0 +1,43 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 憑證與帳密（凱基 API 等）：絕對不可上傳
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+cert/
+certs/
+*.json
+
+# 個人持股與投資報告：屬個人財務資料，不上傳
+*.xlsx
+*.md
+*.xlsx
+投資報告.pdf
+
+# AI 綜合評分的通知節流狀態（記錄每檔持股上次提醒的訊號/日期），屬個人使用記錄，不上傳
+alert_state.json
+
+# 太太短線輪動預測的事後驗證記錄，屬個人使用記錄，不上傳
+rotation_predictions.json
+
+# 暫存/除錯輸出
+verify_output.txt
+_test_report.xlsx
+
+# 凱基 API 除錯用暫存檔（下載的元件包、SDK 執行期產生的檔案）
+_kgi_setup/
+errMsg.ini
+TradeCom.*.log
