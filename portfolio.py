@@ -39,7 +39,9 @@ MAX_MONTHLY_FUNDED_CANDIDATES = 3
 # 判斷「市場／法人持續看好」的標準：法人評等為買進／強力買進，或法人目標價高於目前股價
 BULLISH_RECOMMENDATIONS = {"strong_buy", "buy"}
 
-MONTHLY_INVESTMENT = 10000     # 每月定期定額投入金額（新台幣）
+# MONTHLY_INVESTMENT 是使用者的真實投入金額，不寫死在程式碼裡（比照 GOAL_BASELINE_VALUE 的做法），
+# 改從 .env 讀取，.env 本身已 gitignore。
+MONTHLY_INVESTMENT = float(os.getenv("MONTHLY_INVESTMENT", "0"))     # 每月定期定額投入金額（新台幣）
 
 # 個人化設定（可投入現金／風險承受能力／投資期限）：這些是使用者的個人設定，不是市場資料，
 # 比照 MONTHLY_INVESTMENT 的做法直接寫死在這裡，之後要調整就直接改這幾個值。
