@@ -10,6 +10,7 @@
 """
 
 from datetime import datetime
+import xml.sax.saxutils as saxutils
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -19,7 +20,14 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
-from portfolio import weight, cost_weight
+from portfolio import (
+    weight,
+    cost_weight,
+    current_price_display,
+    industry_or_sector_label_zh,
+    market_intel_highlight,
+    MAX_CARRYOVER_MONTHS,
+)
 
 PDF_REPORT_PATH = "投資報告.pdf"
 
@@ -128,96 +136,90 @@ def _holdings_table(holdings, total_value, total_cost) -> Table:
 
 
 def _fundamentals_table(holdings) -> Table:
-    headers = ["代號", "名稱", "產業", "本益比(TTM)", "法人目標價"]
+    headers = ["代號", "名稱", "產業", "本益比(TTM)", "目前股價", "法人目標價"]
     rows = []
     for h in holdings:
         pe = f"{h.trailing_pe:.1f}" if h.trailing_pe else "N/A"
         target = f"{h.target_mean_price:,.1f}" if h.target_mean_price else "N/A"
-        rows.append([h.code, h.name, h.industry or h.sector or "N/A", pe, target])
-    return _make_table(headers, rows, [2 * cm, 3.6 * cm, 6 * cm, 3.2 * cm, 3.4 * cm])
+        rows.append([h.code, h.name, industry_or_sector_label_zh(h), pe, current_price_display(h), target])
+    return _make_table(headers, rows, [2 * cm, 3.6 * cm, 5 * cm, 3 * cm, 3.6 * cm, 3.4 * cm])
 
 
-def _ai_scoring_flowables(holdings, ai_scoring: dict) -> list:
-    flowables = []
+def _buy_points_table(buy_points_data: list[dict]) -> Table:
+    headers = ["代號", "名稱", "近一年區間", "建議承接區間", "現價位置", "法人目標價", "上漲空間"]
+    rows = []
+    for bp in buy_points_data:
+        week52 = bp.get("week52_range") or "N/A"
+        zone = bp.get("suggested_zone") or "N/A"
+        pos = bp.get("price_position") or "N/A"
+        target = f"{bp['target_price']:,.1f}" if bp.get("target_price") is not None else "N/A"
+        upside = f"{bp['upside_pct']:+.1%}" if bp.get("upside_pct") is not None else "N/A"
+        rows.append([bp["code"], bp["name"], week52, zone, pos, target, upside])
+    if not rows:
+        rows.append(["N/A", "N/A", "N/A", "N/A", "暫無資料。", "N/A", "N/A"])
+    return _make_table(headers, rows, [1.8 * cm, 3 * cm, 3.4 * cm, 3.4 * cm, 5.4 * cm, 2.8 * cm, 2.4 * cm])
+
+
+def _ai_scoring_table(holdings, ai_scoring: dict) -> Table:
+    headers = ["訊號", "代號", "名稱", "說明", "Investment Score", "Risk Score", "法人目標價", "關鍵理由"]
+    rows = []
     for h in holdings:
         r = ai_scoring.get(h.code)
         if not r:
-            flowables.append(_p(f"・{h.code} {h.name}：尚無評分資料。", STYLE_BULLET))
+            rows.append(["N/A", h.code, h.name, "尚無評分資料。", "N/A", "N/A", "N/A", "N/A"])
             continue
 
+        star_marker = '<font color="#6a1b9a"><b>【重點】</b></font>' if r.get("star") else ""
+        signal_cell = f"{star_marker}{_signal_marker(r['signal'])}"
         score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
         risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
-        target_str = f"／法人目標價 {r['target_price']:,.1f}" if r.get("target_price") is not None else ""
-        star_marker = '<font color="#6a1b9a"><b>【重點追蹤】</b></font> ' if r.get("star") else ""
-        marker = _signal_marker(r["signal"])
-
-        flowables.append(
-            _p(
-                f"・{star_marker}{marker} <b>{h.code} {h.name}</b>：{r['label']}"
-                f"（Investment Score {score_str}／Risk Score {risk_str}{target_str}）",
-                STYLE_BULLET,
-            )
-        )
-        if r.get("reasons"):
-            flowables.append(_p(f"・關鍵理由：{'；'.join(r['reasons'])}", STYLE_SUB_BULLET))
-    if not flowables:
-        flowables.append(_p("・暫無資料。", STYLE_BULLET))
-    return flowables
+        target_str = f"{r['target_price']:,.1f}" if r.get("target_price") is not None else "N/A"
+        reasons = "<br/>".join(r.get("reasons") or []) or "N/A"
+        rows.append([signal_cell, h.code, h.name, r["label"], score_str, risk_str, target_str, reasons])
+    if not rows:
+        rows.append(["N/A", "N/A", "N/A", "暫無資料。", "N/A", "N/A", "N/A", "N/A"])
+    return _make_table(headers, rows, [2.4 * cm, 1.8 * cm, 3 * cm, 5 * cm, 2.4 * cm, 2 * cm, 2.4 * cm, 6.5 * cm])
 
 
-def _market_intel_flowables(holdings, market_intel: dict) -> list:
-    flowables = []
-    has_any = False
+def _market_intel_table(holdings, market_intel: dict) -> Table:
+    """需求 7：精簡成「重點摘要」表格（代號/名稱/重點摘要 + 相關新聞連結）。"""
+    headers = ["代號", "名稱", "重點摘要", "相關新聞"]
+    rows = []
     for h in holdings:
         info = market_intel.get(h.code)
-        if not info:
-            continue
+        highlight = market_intel_highlight(info)
+        news = (info.get("general_news") or [])[:3] if info else []
+        if news:
+            news_cell = "<br/>".join(
+                f'<a href={saxutils.quoteattr(n["link"])} color="#1a5fb4">{saxutils.escape(n["title"])}</a>'
+                for n in news
+            )
+        else:
+            news_cell = "N/A"
+        rows.append([h.code, h.name, highlight, news_cell])
+    if not rows:
+        rows.append(["N/A", "N/A", "暫無資料。", "N/A"])
+    return _make_table(headers, rows, [1.8 * cm, 3.2 * cm, 8 * cm, 10 * cm])
 
-        parts = []
-        rev = info.get("monthly_revenue")
-        if rev:
-            yoy = rev.get("營業收入-去年同月增減(%)")
-            month = rev.get("資料年月")
-            if yoy not in (None, ""):
-                parts.append(f"月營收({month})年增率 {float(yoy):+.1f}%")
 
-        inc = info.get("income_statement") or {}
-        if inc.get("revenue") is not None:
-            eps_str = f"／EPS {inc['eps']}元" if inc.get("eps") else ""
-            parts.append(f"{inc.get('quarter', '最新季')}營收 {float(inc['revenue']):,.0f}仟元{eps_str}")
-
-        material_news = info.get("material_news") or []
-        if material_news:
-            parts.append(f"今日重大訊息 {len(material_news)} 則：" + "；".join(n.get("主旨", "").strip() for n in material_news[:2]))
-
-        conf = info.get("investor_conference")
-        if conf:
-            parts.append(f"下一場法說會 {conf['date']} {conf['time']}，地點：{conf['location']}")
-
-        flow = info.get("institutional_flow")
-        if flow and flow.get("total_net") is not None:
-            if flow.get("foreign_net") is not None:
-                parts.append(
-                    f"三大法人買賣超 {flow['total_net']:+,.0f} 股"
-                    f"（外資 {flow['foreign_net']:+,.0f}／投信 {flow['trust_net']:+,.0f}／自營商 {flow['dealer_net']:+,.0f}）"
-                )
-            else:
-                parts.append(f"三大法人買賣超合計 {flow['total_net']:+,.0f} 股")
-
-        if not parts:
-            continue
-        has_any = True
-        flowables.append(_p(f"・<b>{h.code} {h.name}</b>　" + "，".join(parts), STYLE_BULLET))
-        for n in (info.get("general_news") or [])[:2]:
-            flowables.append(_p(f"‣ {n['title']}", STYLE_SUB_BULLET))
-
-    if not has_any:
-        flowables.append(_p("・暫無資料。", STYLE_BULLET))
-    return flowables
+def _candidate_table(candidates: list[dict]) -> Table:
+    headers = ["星等", "代號", "名稱", "股價", "Investment Score", "Risk Score", "法人目標價", "關鍵理由"]
+    rows = []
+    for r in candidates:
+        score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
+        risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
+        target_str = f"{r['target_price']:,.1f}" if r.get("target_price") is not None else "N/A"
+        reasons = "<br/>".join(r.get("reasons") or []) or "N/A"
+        rows.append(
+            [r.get("conviction_stars") or "N/A", r["code"], r["name"], f"{r['price']:,.1f}", score_str, risk_str, target_str, reasons]
+        )
+    return _make_table(headers, rows, [2.2 * cm, 1.8 * cm, 3 * cm, 2.2 * cm, 2.4 * cm, 2 * cm, 2.4 * cm, 6.5 * cm])
 
 
 def _candidate_watchlist_flowables(candidates: list[dict]) -> list:
-    """目前沒有持有、評分較高的候選新標的（跟既有持股分開，回答「還有沒有值得考慮加入的新標的」）。"""
+    """目前沒有持有、評分較高的候選新標的（跟既有持股分開，回答「還有沒有值得考慮加入的新標的」）。
+    個股一張表、ETF 一張表（呼叫端各自傳入自己的 candidates），維持既有「高價股/低價股」分組。
+    """
     flowables = []
     if not candidates:
         flowables.append(_p("・目前抓不到候選新標的資料，或候選池股票都已在你的持股中。", STYLE_BULLET))
@@ -229,20 +231,77 @@ def _candidate_watchlist_flowables(candidates: list[dict]) -> list:
         if not group:
             continue
         flowables.append(_p(f"<b>{tier_label[tier]}</b>", STYLE_BODY))
-        for r in group:
-            score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
-            risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
-            target_str = f"／法人目標價 {r['target_price']:,.1f}" if r.get("target_price") is not None else ""
-            stars = _pdf_safe(r.get("conviction_stars") or "")
-            flowables.append(
-                _p(
-                    f"・{stars} <b>{r['code']} {r['name']}</b>　股價 {r['price']:,.1f}"
-                    f"（Investment Score {score_str}／Risk Score {risk_str}{target_str}）",
-                    STYLE_BULLET,
-                )
+        flowables.append(_candidate_table(group))
+        flowables.append(Spacer(1, 6))
+    return flowables
+
+
+def _monthly_priority_table(priority_list: list[dict]) -> Table:
+    headers = ["順位", "代號", "名稱", "Investment Score", "長期信心"]
+    rows = []
+    for p in priority_list:
+        inv_str = f"{p['investment_score']:.0f}" if p.get("investment_score") is not None else "N/A"
+        rows.append([str(p["rank"]), p["code"], p["name"], inv_str, p.get("conviction_stars", "N/A")])
+    return _make_table(headers, rows, [1.6 * cm, 1.8 * cm, 3.6 * cm, 3.2 * cm, 2.6 * cm])
+
+
+def _monthly_allocation_table(allocations: list[dict]) -> Table:
+    headers = ["代號", "名稱", "投入金額", "買進階段", "本輪比例", "約可買股數", "備註"]
+    rows = []
+    for a in allocations:
+        rows.append(
+            [
+                a["code"],
+                a["name"],
+                f"{a['amount']:,.0f}",
+                a["tier_label"],
+                f"{a['tier_pct']:.0%}",
+                f"{a['shares']:,.1f}",
+                a.get("note") or "",
+            ]
+        )
+    return _make_table(headers, rows, [1.8 * cm, 3 * cm, 2.6 * cm, 4 * cm, 2 * cm, 2.6 * cm, 6 * cm])
+
+
+def _monthly_allocation_flowables(data: dict) -> list:
+    """需求 6：優先購買清單＋資金分配改成表格，總預算說明／尚未分配結轉／排除加碼說明維持文字。"""
+    if data.get("no_value_note"):
+        return [_p(data["no_value_note"], STYLE_BODY)]
+
+    amount = data["amount"]
+    carryover = data["carryover"]
+    total_budget = data["total_budget"]
+    flowables = [
+        _p(
+            f"本月可投資金額：新台幣 {total_budget:,.0f} 元"
+            + (f"（月定期定額 {amount:,.0f} 元＋現金流結餘 {carryover:,.0f} 元，結轉上限 {data['carryover_cap']:,.0f} 元）" if carryover else f"（月定期定額 {amount:,.0f} 元）"),
+            STYLE_BODY,
+        )
+    ]
+
+    if data.get("no_candidates_note"):
+        flowables.append(_p(data["no_candidates_note"], STYLE_BODY))
+        flowables.extend(_bullets(data.get("excluded_notes") or []))
+        return flowables
+
+    flowables.append(_p("優先購買清單（依 Investment Score／長期持股信心排序）", STYLE_BODY))
+    flowables.append(_monthly_priority_table(data["priority_list"]))
+    flowables.append(Spacer(1, 8))
+    flowables.append(_p("本月資金分配（集中在優先順序最前面的標的，不是每檔都買一點；資金用完或達上限為止）", STYLE_BODY))
+    flowables.append(_monthly_allocation_table(data["allocations"]))
+    flowables.append(Spacer(1, 8))
+
+    if data.get("remaining") is not None:
+        flowables.append(
+            _p(
+                f"尚未分配：{data['remaining']:,.0f} 元，將結轉至下月（結轉上限：{MAX_CARRYOVER_MONTHS} 個月投入金額 {data['carryover_cap']:,.0f} 元）。",
+                STYLE_BODY,
             )
-            if r.get("reasons"):
-                flowables.append(_p(f"・關鍵理由：{'；'.join(r['reasons'])}", STYLE_SUB_BULLET))
+        )
+    if data.get("no_allocation_note"):
+        flowables.append(_p(data["no_allocation_note"], STYLE_BODY))
+    flowables.extend(_bullets(data.get("excluded_notes") or []))
+
     return flowables
 
 
@@ -287,7 +346,7 @@ def build_pdf_flowables(holdings, ctx: dict) -> list:
     flow.append(_fundamentals_table(holdings))
 
     flow.append(_p("三、合理買點", STYLE_H2))
-    flow.extend(_bullets(ctx["buy_points"]))
+    flow.append(_buy_points_table(ctx.get("buy_points_data", [])))
 
     flow.append(_p("四、AI 綜合評分與行動建議", STYLE_H2))
     flow.append(
@@ -307,10 +366,14 @@ def build_pdf_flowables(holdings, ctx: dict) -> list:
             STYLE_SMALL,
         )
     )
-    flow.extend(_ai_scoring_flowables(holdings, ctx.get("ai_scoring", {})))
+    flow.append(_ai_scoring_table(holdings, ctx.get("ai_scoring", {})))
 
     flow.append(_p("五、產業配置建議", STYLE_H2))
-    flow.extend(_bullets([f"{sector}：{w:.1%}" for sector, w in ctx["sector_allocation"].items()]))
+    sector_headers = ["產業別", "佔投組市值比重"]
+    sector_rows = [[sector, f"{w:.1%}"] for sector, w in ctx["sector_allocation"].items()]
+    if sector_rows:
+        flow.append(_make_table(sector_headers, sector_rows, [8 * cm, 5 * cm]))
+        flow.append(Spacer(1, 8))
     flow.extend(_bullets(ctx["sector_advice"]))
 
     flow.append(_p("六、風險評估與再平衡", STYLE_H2))
@@ -320,20 +383,21 @@ def build_pdf_flowables(holdings, ctx: dict) -> list:
     flow.extend(_bullets(ctx["rebalance"]))
 
     flow.append(_p("七、每月投資建議", STYLE_H2))
-    flow.extend(_plain_lines(ctx["monthly_allocation"]))
+    flow.extend(_monthly_allocation_flowables(ctx.get("monthly_allocation_data", {})))
 
     flow.append(_p("八、後續追蹤重點", STYLE_H2))
     flow.extend(_bullets(ctx["monthly_focus"]))
 
-    flow.append(_p("九、市場情報：月營收、財報、新聞、法說會、三大法人買賣超", STYLE_H2))
+    flow.append(_p("九、市場情報：重點摘要", STYLE_H2))
     flow.append(
         _p(
+            "依優先序（重大訊息 > 三大法人買賣超 > 月營收年增率 > 下一場法說會）只挑一項最值得注意的重點；"
             "月營收／財報來源：證交所 OpenAPI（僅上市）；新聞：Google 新聞；"
             "法說會：公開資訊觀測站；三大法人買賣超：證交所（上市，含細項）／櫃買中心（上櫃，僅合計）。",
             STYLE_SMALL,
         )
     )
-    flow.extend(_market_intel_flowables(holdings, ctx.get("market_intel", {})))
+    flow.append(_market_intel_table(holdings, ctx.get("market_intel", {})))
 
     flow.append(_p("十、潛力新標的觀察", STYLE_H2))
     flow.append(

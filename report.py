@@ -2,7 +2,15 @@
 
 from datetime import datetime
 
-from portfolio import build_report_context, weight, cost_weight
+from portfolio import (
+    build_report_context,
+    weight,
+    cost_weight,
+    current_price_display,
+    industry_or_sector_label_zh,
+    market_intel_highlight,
+    MAX_CARRYOVER_MONTHS,
+)
 
 
 REPORT_PATH = "投資報告.md"
@@ -30,65 +38,89 @@ def _holding_table(holdings, total_value, total_cost) -> str:
 
 
 def _fundamentals_table(holdings) -> str:
-    header = "| 代號 | 名稱 | 產業 | 本益比(TTM/預估) | EPS(TTM/預估) | 法人目標價 | 法人評等 | 殖利率 |\n"
-    header += "|---|---|---|---:|---:|---:|---|---:|\n"
+    header = "| 代號 | 名稱 | 產業 | 本益比(TTM/預估) | EPS(TTM/預估) | 目前股價 | 法人目標價 | 法人評等 | 殖利率 |\n"
+    header += "|---|---|---|---:|---:|---:|---:|---|---:|\n"
     rows = []
     for h in holdings:
         pe = f"{h.trailing_pe:.1f}/{h.forward_pe:.1f}" if h.trailing_pe and h.forward_pe else "N/A"
         eps = f"{h.trailing_eps:.2f}/{h.forward_eps:.2f}" if h.trailing_eps and h.forward_eps else "N/A"
+        current_price = current_price_display(h)
         target = f"{h.target_mean_price:,.1f}" if h.target_mean_price else "N/A"
         rec = h.recommendation or "N/A"
         div = f"{h.dividend_yield:.2f}%" if h.dividend_yield else "N/A"
-        rows.append(f"| {h.code} | {h.name} | {h.industry or h.sector or 'N/A'} | {pe} | {eps} | {target} | {rec} | {div} |")
+        rows.append(
+            f"| {h.code} | {h.name} | {industry_or_sector_label_zh(h)} | {pe} | {eps} | {current_price} | {target} | {rec} | {div} |"
+        )
     return header + "\n".join(rows)
 
 
-def _ai_scoring_section(holdings, ai_scoring: dict) -> list[str]:
-    lines = []
+def _buy_points_table(buy_points_data: list[dict]) -> str:
+    header = "| 代號 | 名稱 | 近一年區間 | 建議承接區間 | 現價位置 | 法人目標價 | 上漲空間 |\n"
+    header += "|---|---|---|---|---|---:|---:|\n"
+    rows = []
+    for bp in buy_points_data:
+        week52 = bp.get("week52_range") or "N/A"
+        zone = bp.get("suggested_zone") or "N/A"
+        pos = bp.get("price_position") or "N/A"
+        target = f"{bp['target_price']:,.1f}" if bp.get("target_price") is not None else "N/A"
+        upside = f"{bp['upside_pct']:+.1%}" if bp.get("upside_pct") is not None else "N/A"
+        rows.append(f"| {bp['code']} | {bp['name']} | {week52} | {zone} | {pos} | {target} | {upside} |")
+    if not rows:
+        rows.append("| N/A | N/A | N/A | N/A | 暫無資料。 | N/A | N/A |")
+    return header + "\n".join(rows)
+
+
+def _ai_scoring_table(holdings, ai_scoring: dict) -> str:
+    header = "| 訊號 | 代號 | 名稱 | 說明 | Investment Score | Risk Score | 法人目標價 | 關鍵理由 |\n"
+    header += "|---|---|---|---|---:|---:|---:|---|\n"
+    rows = []
     for h in holdings:
         r = ai_scoring.get(h.code)
         if not r:
-            lines.append(f"- {h.code} {h.name}：尚無評分資料。")
+            rows.append(f"| N/A | {h.code} | {h.name} | 尚無評分資料。 | N/A | N/A | N/A | N/A |")
             continue
 
+        star = "⭐" if r.get("star") else ""
+        signal = f"{star}{r['signal']}"
         score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
         risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
-        target_str = f"／法人目標價 {r['target_price']:,.1f}" if r.get("target_price") is not None else ""
-        star = "⭐" if r.get("star") else ""
+        target_str = f"{r['target_price']:,.1f}" if r.get("target_price") is not None else "N/A"
+        reasons = "<br>".join(r.get("reasons") or []) or "N/A"
+        rows.append(f"| {signal} | {h.code} | {h.name} | {r['label']} | {score_str} | {risk_str} | {target_str} | {reasons} |")
+    if not rows:
+        rows.append("| N/A | N/A | N/A | 暫無資料。 | N/A | N/A | N/A | N/A |")
+    return header + "\n".join(rows)
 
-        lines.append(
-            f"- {star}{r['signal']} **{h.code} {h.name}**：{r['label']}"
-            f"（Investment Score {score_str}／Risk Score {risk_str}{target_str}）"
+
+def _candidate_table(candidates: list[dict]) -> str:
+    header = "| 星等 | 代號 | 名稱 | 股價 | Investment Score | Risk Score | 法人目標價 | 關鍵理由 |\n"
+    header += "|---|---|---|---:|---:|---:|---:|---|\n"
+    rows = []
+    for r in candidates:
+        score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
+        risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
+        target_str = f"{r['target_price']:,.1f}" if r.get("target_price") is not None else "N/A"
+        reasons = "<br>".join(r.get("reasons") or []) or "N/A"
+        rows.append(
+            f"| {r.get('conviction_stars') or 'N/A'} | {r['code']} | {r['name']} | {r['price']:,.1f} | "
+            f"{score_str} | {risk_str} | {target_str} | {reasons} |"
         )
-        if r.get("reasons"):
-            lines.append(f"  - 關鍵理由：{'；'.join(r['reasons'])}")
-    if not lines:
-        lines.append("- 暫無資料。")
-    return lines
+    return header + "\n".join(rows)
 
 
 def _candidate_watchlist_section(candidates: list[dict]) -> list[str]:
     """目前沒有持有、評分較高的候選新標的（跟既有持股分開，回答「還有沒有值得考慮加入的新標的」，
     不是「該不該對目前持股採取行動」）。"""
     if not candidates:
-        return ["- 目前抓不到候選新標的資料，或候選池股票都已在你的持股中。"]
+        return ["目前抓不到候選新標的資料，或候選池股票都已在你的持股中。"]
 
     lines = []
     for tier, tier_label in (("high", "高價股"), ("low", "低價股")):
         group = [r for r in candidates if r.get("price_tier") == tier]
         if not group:
             continue
-        lines.append(f"**{tier_label}**")
-        for r in group:
-            score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
-            risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
-            target_str = f"／法人目標價 {r['target_price']:,.1f}" if r.get("target_price") is not None else ""
-            lines.append(
-                f"- {r['conviction_stars']} **{r['code']} {r['name']}**　"
-                f"股價 {r['price']:,.1f}（Investment Score {score_str}／Risk Score {risk_str}{target_str}）"
-            )
-            if r.get("reasons"):
-                lines.append(f"  - 關鍵理由：{'；'.join(r['reasons'])}")
+        lines.append(f"**{tier_label}**\n")
+        lines.append(_candidate_table(group))
         lines.append("")
     return lines
 
@@ -108,55 +140,79 @@ def _goal_section(goal: dict) -> list[str]:
     ]
 
 
-def _market_intel_section(holdings, market_intel: dict) -> list[str]:
-    lines = []
+def _market_intel_table(holdings, market_intel: dict) -> str:
+    """依需求 7 精簡成「重點摘要」表格：代號/名稱/重點摘要（只挑一項最值得注意的）+新聞連結。"""
+    header = "| 代號 | 名稱 | 重點摘要 | 相關新聞 |\n"
+    header += "|---|---|---|---|\n"
+    rows = []
     for h in holdings:
         info = market_intel.get(h.code)
-        if not info:
-            continue
+        highlight = market_intel_highlight(info)
+        news = (info.get("general_news") or [])[:3] if info else []
+        news_str = "<br>".join(f"[{n['title']}]({n['link']})" for n in news) if news else "N/A"
+        rows.append(f"| {h.code} | {h.name} | {highlight} | {news_str} |")
+    if not rows:
+        rows.append("| N/A | N/A | 暫無資料。 | N/A |")
+    return header + "\n".join(rows)
 
-        parts = [f"**{h.code} {h.name}**"]
 
-        rev = info.get("monthly_revenue")
-        if rev:
-            yoy = rev.get("營業收入-去年同月增減(%)")
-            month = rev.get("資料年月")
-            if yoy not in (None, ""):
-                parts.append(f"月營收({month})年增率 {float(yoy):+.1f}%")
+def _monthly_priority_table(priority_list: list[dict]) -> str:
+    header = "| 順位 | 代號 | 名稱 | Investment Score | 長期信心 |\n"
+    header += "|---:|---|---|---:|---|\n"
+    rows = []
+    for p in priority_list:
+        inv_str = f"{p['investment_score']:.0f}" if p.get("investment_score") is not None else "N/A"
+        rows.append(f"| {p['rank']} | {p['code']} | {p['name']} | {inv_str} | {p.get('conviction_stars', 'N/A')} |")
+    return header + "\n".join(rows)
 
-        inc = info.get("income_statement") or {}
-        if inc.get("revenue") is not None:
-            revenue_str = f"{float(inc['revenue']):,.0f}仟元"
-            parts.append(
-                f"{inc.get('quarter', '最新季')}營收 {revenue_str}"
-                + (f"／EPS {inc['eps']}元" if inc.get("eps") else "")
-            )
 
-        material_news = info.get("material_news") or []
-        if material_news:
-            parts.append(f"今日重大訊息 {len(material_news)} 則：" + "；".join(n.get("主旨", "").strip() for n in material_news[:2]))
+def _monthly_allocation_table(allocations: list[dict]) -> str:
+    header = "| 代號 | 名稱 | 投入金額 | 買進階段 | 本輪比例 | 約可買股數 | 備註 |\n"
+    header += "|---|---|---:|---|---:|---:|---|\n"
+    rows = []
+    for a in allocations:
+        rows.append(
+            f"| {a['code']} | {a['name']} | {a['amount']:,.0f} | {a['tier_label']} | {a['tier_pct']:.0%} | "
+            f"{a['shares']:,.1f} | {a.get('note') or ''} |"
+        )
+    return header + "\n".join(rows)
 
-        conf = info.get("investor_conference")
-        if conf:
-            parts.append(f"下一場法說會 {conf['date']} {conf['time']}，地點：{conf['location']}")
 
-        flow = info.get("institutional_flow")
-        if flow and flow.get("total_net") is not None:
-            if flow.get("foreign_net") is not None:
-                parts.append(
-                    f"三大法人買賣超 {flow['total_net']:+,.0f} 股"
-                    f"（外資 {flow['foreign_net']:+,.0f}／投信 {flow['trust_net']:+,.0f}／自營商 {flow['dealer_net']:+,.0f}）"
-                )
-            else:
-                parts.append(f"三大法人買賣超合計 {flow['total_net']:+,.0f} 股")
+def _monthly_allocation_section(data: dict) -> list[str]:
+    """需求 6：優先購買清單＋資金分配改成表格，總預算說明／尚未分配結轉／排除加碼說明維持文字，
+    分別放在表格前後（總預算是前情提要、結轉與排除說明是表格結果的附註）。"""
+    if data.get("no_value_note"):
+        return [data["no_value_note"]]
 
-        lines.append("- " + "，".join(parts))
+    amount = data["amount"]
+    carryover = data["carryover"]
+    total_budget = data["total_budget"]
+    lines = [
+        f"本月可投資金額：新台幣 {total_budget:,.0f} 元"
+        + (f"（月定期定額 {amount:,.0f} 元＋現金流結餘 {carryover:,.0f} 元，結轉上限 {data['carryover_cap']:,.0f} 元）" if carryover else f"（月定期定額 {amount:,.0f} 元）")
+    ]
+    lines.append("")
 
-        for n in (info.get("general_news") or [])[:3]:
-            lines.append(f"  - [{n['title']}]({n['link']})")
+    if data.get("no_candidates_note"):
+        lines.append(data["no_candidates_note"])
+        for n in data.get("excluded_notes") or []:
+            lines.append(f"- {n}")
+        return lines
 
-    if not lines:
-        lines.append("- 暫無資料。")
+    lines.append("**優先購買清單（依 Investment Score／長期持股信心排序）**\n")
+    lines.append(_monthly_priority_table(data["priority_list"]))
+    lines.append("")
+    lines.append("**本月資金分配（集中在優先順序最前面的標的，不是每檔都買一點；資金用完或達上限為止）**\n")
+    lines.append(_monthly_allocation_table(data["allocations"]))
+    lines.append("")
+
+    if data.get("remaining") is not None:
+        lines.append(f"尚未分配：{data['remaining']:,.0f} 元，將結轉至下月（結轉上限：{MAX_CARRYOVER_MONTHS} 個月投入金額 {data['carryover_cap']:,.0f} 元）。")
+    if data.get("no_allocation_note"):
+        lines.append(data["no_allocation_note"])
+    for n in data.get("excluded_notes") or []:
+        lines.append(f"- {n}")
+
     return lines
 
 
@@ -197,8 +253,7 @@ def generate_investment_report(holdings=None, ctx=None) -> str:
     lines.append("")
 
     lines.append("## 三、合理買點\n")
-    for bp in ctx["buy_points"]:
-        lines.append(f"- {bp}")
+    lines.append(_buy_points_table(ctx.get("buy_points_data", [])))
     lines.append("")
 
     lines.append("## 四、AI 綜合評分與行動建議\n")
@@ -207,7 +262,7 @@ def generate_investment_report(holdings=None, ctx=None) -> str:
         "（基本面30%／成長性20%／籌碼面15%／技術面15%／估值10%／市場環境10%，缺資料的子項目"
         "會標註「資料覆蓋率低」而非硬湊分數）與目前的持股狀態，換算成 Investment Score(0-100)"
         "＋獨立的 Risk Score(0-100，越高風險越高)，最終只給四種結論：🟢加碼買進／🟡持有觀察／"
-        "🟠分批獲利了結／🔴全數賣出。極端虧損部位（≤-70%）除非出現重大利多/利空新聞，"
+        "🟠分批獲利了結／🔴全數賣出。極端虧損部位（≤-40%）除非出現重大利多/利空新聞，"
         "不會每天重複提醒同一個「建議停損」。*\n"
     )
     cash = ctx.get("available_cash", 0)
@@ -215,12 +270,13 @@ def generate_investment_report(holdings=None, ctx=None) -> str:
         f"- 個人化設定：可投入現金 新台幣 {cash:,.0f} 元／風險承受能力 {ctx.get('risk_tolerance', 'N/A')}"
         f"／投資期限 {ctx.get('investment_horizon', 'N/A')}\n"
     )
-    lines.extend(_ai_scoring_section(holdings, ctx.get("ai_scoring", {})))
+    lines.append(_ai_scoring_table(holdings, ctx.get("ai_scoring", {})))
     lines.append("")
 
     lines.append("## 五、產業配置建議\n")
-    for sector, w in ctx["sector_allocation"].items():
-        lines.append(f"- {sector}：{w:.1%}")
+    header = "| 產業別 | 佔投組市值比重 |\n|---|---:|\n"
+    rows = [f"| {sector} | {w:.1%} |" for sector, w in ctx["sector_allocation"].items()]
+    lines.append(header + "\n".join(rows))
     lines.append("")
     for advice in ctx["sector_advice"]:
         lines.append(f"- {advice}")
@@ -236,7 +292,7 @@ def generate_investment_report(holdings=None, ctx=None) -> str:
     lines.append("")
 
     lines.append("## 七、每月投資建議\n")
-    lines.extend(ctx["monthly_allocation"])
+    lines.extend(_monthly_allocation_section(ctx.get("monthly_allocation_data", {})))
     lines.append("")
 
     lines.append("## 八、後續追蹤重點\n")
@@ -244,12 +300,13 @@ def generate_investment_report(holdings=None, ctx=None) -> str:
         lines.append(f"- {f}")
     lines.append("")
 
-    lines.append("## 九、市場情報：月營收、財報、新聞、法說會、三大法人買賣超\n")
+    lines.append("## 九、市場情報：重點摘要\n")
     lines.append(
-        "*月營收／財報資料來源：台灣證交所 OpenAPI（僅涵蓋上市公司）；新聞來源：Google 新聞；"
+        "*依優先序（重大訊息 > 三大法人買賣超 > 月營收年增率 > 下一場法說會）只挑一項最值得注意的"
+        "重點；月營收／財報資料來源：台灣證交所 OpenAPI（僅涵蓋上市公司）；新聞來源：Google 新聞；"
         "法說會來源：公開資訊觀測站；三大法人買賣超來源：證交所（上市，含細項）／櫃買中心（上櫃，僅合計）。*\n"
     )
-    lines.extend(_market_intel_section(holdings, ctx.get("market_intel", {})))
+    lines.append(_market_intel_table(holdings, ctx.get("market_intel", {})))
     lines.append("")
 
     lines.append("## 十、潛力新標的觀察\n")

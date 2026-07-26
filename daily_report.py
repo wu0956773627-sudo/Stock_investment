@@ -15,9 +15,12 @@ from pdf_report import generate_pdf_report, PDF_REPORT_PATH
 import etf_quality_tracking
 import notify
 
-# 太太的 Email 用的股票/ETF 名稱玫瑰紅、代號寶藍配色（sector_rotation.py 已驗證過的規格），
-# 同步套用到使用者自己的每日報告 HTML 版本，方便在一堆數字中快速抓到重點標的。
-from sector_rotation import HTML_BASE_FONT_PX, HTML_HEADER_FONT_PX, HTML_STOCK_FONT_PX, HTML_NAME_COLOR, HTML_CODE_COLOR
+# 太太的 Email 用的股票/ETF 名稱玫瑰紅、代號寶藍配色與表格樣式（sector_rotation.py 已驗證過的
+# 規格，也已把太太的短線輪動信改成表格化呈現），同步套用到使用者自己的每日報告 HTML 版本。
+from sector_rotation import (
+    HTML_BASE_FONT_PX, HTML_HEADER_FONT_PX, HTML_NAME_COLOR, HTML_CODE_COLOR,
+    HTML_TABLE_HEAD_BG, HTML_TABLE_GRID,
+)
 
 PNL_RED = "#e03131"    # 台股慣例：紅漲／正向
 PNL_GREEN = "#2f9e44"  # 台股慣例：綠跌／負向
@@ -107,18 +110,82 @@ def build_email_summary(ctx: dict) -> str:
     return "\n".join(lines)
 
 
-def _name_code_html(code: str, name: str) -> str:
+# ── 表格化呈現（沿用 sector_rotation.py 已驗證過的表格樣式，Email HTML 版用） ──────────────
+def _th(text: str) -> str:
     return (
-        f'<span style="color:{HTML_NAME_COLOR};font-weight:700;font-size:{HTML_STOCK_FONT_PX}px;">{name}</span>'
-        f'（<span style="color:{HTML_CODE_COLOR};font-weight:700;font-size:{HTML_STOCK_FONT_PX}px;">{code}</span>）'
+        f'<th style="padding:6px 8px;border:1px solid {HTML_TABLE_GRID};'
+        f'background:{HTML_TABLE_HEAD_BG};color:#ffffff;font-size:{HTML_BASE_FONT_PX}px;'
+        f'white-space:nowrap;">{text}</th>'
     )
 
 
+def _td(html_content: str) -> str:
+    return (
+        f'<td style="padding:6px 8px;border:1px solid {HTML_TABLE_GRID};'
+        f'font-size:{HTML_BASE_FONT_PX}px;white-space:nowrap;">{html_content}</td>'
+    )
+
+
+def _wrap_table(header_cells: list[str], row_htmls: list[str]) -> str:
+    header = "".join(_th(c) for c in header_cells)
+    body = "".join(row_htmls)
+    return (
+        '<div style="overflow-x:auto;"><table style="border-collapse:collapse;margin:8px 0;">'
+        f'<tr>{header}</tr>{body}</table></div>'
+    )
+
+
+def _signal_table_html(notable: list[tuple]) -> str:
+    header = ["訊號", "股票名稱", "股票代號", "損益率", "Investment Score", "Risk Score", "建議"]
+    rows = []
+    for h, r in notable:
+        marker_color = SIGNAL_COLORS.get(r["signal"], "#333333")
+        pnl_pct = h.pnl_pct
+        pnl_str = f"{pnl_pct:+.1%}" if pnl_pct is not None else "N/A"
+        pnl_color = PNL_RED if (pnl_pct or 0) >= 0 else PNL_GREEN
+        score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
+        risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
+        cells = [
+            f'<span style="color:{marker_color};font-weight:900;">{r["signal"]}</span>',
+            f'<span style="color:{HTML_NAME_COLOR};font-weight:700;">{h.name}</span>',
+            f'<span style="color:{HTML_CODE_COLOR};font-weight:700;">{h.code}</span>',
+            f'<span style="color:{pnl_color};font-weight:900;">{pnl_str}</span>',
+            score_str,
+            risk_str,
+            r["label"],
+        ]
+        rows.append(f"<tr>{''.join(_td(c) for c in cells)}</tr>")
+    return _wrap_table(header, rows)
+
+
+def _candidate_table_html(candidates: list[dict]) -> str:
+    header = ["星等", "名稱", "代號", "股價", "Investment Score", "Risk Score", "法人目標價", "關鍵理由"]
+    rows = []
+    for r in candidates:
+        score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
+        risk_str = f"{r['risk_score']:.0f}" if r.get("risk_score") is not None else "N/A"
+        target_str = f"{r['target_price']:,.1f}" if r.get("target_price") is not None else "－"
+        reasons_str = "；".join(r.get("reasons") or []) or "－"
+        cells = [
+            r.get("conviction_stars") or "－",
+            f'<span style="color:{HTML_NAME_COLOR};font-weight:700;">{r["name"]}</span>',
+            f'<span style="color:{HTML_CODE_COLOR};font-weight:700;">{r["code"]}</span>',
+            f'{r["price"]:,.1f}',
+            score_str,
+            risk_str,
+            target_str,
+            reasons_str,
+        ]
+        rows.append(f"<tr>{''.join(_td(c) for c in cells)}</tr>")
+    return _wrap_table(header, rows)
+
+
 def build_email_html(ctx: dict) -> str:
-    """`build_email_summary()` 的 HTML 版本，套用跟太太短線輪動信一致的配色規格：
+    """`build_email_summary()` 的 HTML 版本，套用跟太太短線輪動信一致的配色與表格規格：
     股票/ETF 名稱玫瑰紅、代號寶藍（見 sector_rotation.py 的 HTML_NAME_COLOR/HTML_CODE_COLOR），
-    損益/漲跌台股慣例紅漲綠跌。純文字版 `build_email_summary()` 繼續當 multipart/alternative
-    的備援內容（收信端不支援 HTML 時顯示）。
+    損益/漲跌台股慣例紅漲綠跌，AI 行動建議提醒與潛力新標的觀察都改成實際 HTML `<table>` 表格
+    （取代原本逐行條列），方便在手機上快速掃視比較。純文字版 `build_email_summary()` 維持條列
+    格式，繼續當 multipart/alternative 的備援內容（收信端不支援 HTML 時顯示）。
     """
     total_pnl_pct_str = f"{ctx['total_pnl_pct']:+.1%}" if ctx["total_pnl_pct"] is not None else "N/A"
     pnl_color = PNL_RED if ctx["total_pnl"] >= 0 else PNL_GREEN
@@ -159,23 +226,13 @@ def build_email_html(ctx: dict) -> str:
     if notable:
         parts.append(f'<div style="font-size:{HTML_HEADER_FONT_PX}px;font-weight:700;margin:16px 0 4px;">'
                       "AI 行動建議提醒（極端虧損股在安靜期內不重複提醒，詳見附件完整報告）</div>")
-        for h, r in notable:
-            marker_color = SIGNAL_COLORS.get(r["signal"], "#333333")
-            parts.append(
-                f'<div style="margin:6px 0;"><span style="color:{marker_color};font-weight:900;">{r["signal"]}</span> '
-                f'{_name_code_html(h.code, h.name)}：{r["label"]}</div>'
-            )
+        parts.append(_signal_table_html(notable))
 
     def _candidate_block(title: str, candidates: list[dict]) -> None:
         if not candidates:
             return
         parts.append(f'<div style="font-size:{HTML_HEADER_FONT_PX}px;font-weight:700;margin:16px 0 4px;">{title}</div>')
-        for r in candidates:
-            score_str = f"{r['investment_score']:.0f}" if r.get("investment_score") is not None else "N/A"
-            parts.append(
-                f'<div style="margin:4px 0;">{r.get("conviction_stars") or ""} {_name_code_html(r["code"], r["name"])}　'
-                f'股價 {r["price"]:,.1f}（Investment Score {score_str}）</div>'
-            )
+        parts.append(_candidate_table_html(candidates))
 
     _candidate_block("潛力新標的觀察（個股，詳見附件完整報告第十節）", ctx.get("candidate_watchlist") or [])
     _candidate_block("潛力新標的觀察（ETF，詳見附件完整報告第十節）", ctx.get("candidate_watchlist_etf") or [])

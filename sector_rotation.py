@@ -296,7 +296,11 @@ HTML_TABLE_HEAD_BG = "#1a3d6d"
 HTML_TABLE_GRID = "#d0d7e2"
 HTML_PNL_GREEN = "#2f9e44"  # 損益為負：綠（台股慣例紅漲綠跌，紅=正向已用 HTML_SELL_ZONE_COLOR）
 
-_TABLE_COLUMNS = ["輪動排名", "輪動類別", "股票名稱", "股票代號", "股價", "買入區間", "獲利了結區間", "損益", "預估天數", "備註"]
+# 太太主要在手機上看信：欄位標題盡量簡短，且只有「股價/買入/了結/損益/天數」這類本來就不會
+# 換行的短數字欄位才用 white-space:nowrap；「名稱」「備註」允許換行（備註常是一整句提醒，
+# 如果也 nowrap 會把整張表撐到手機螢幕好幾倍寬，逼所有欄位一起橫向捲動，體驗更差）。
+_TABLE_COLUMNS = ["排名", "族群", "名稱", "代號", "股價", "買入區間", "了結區間", "損益", "天數", "備註"]
+_NOWRAP_COLS = {0, 1, 3, 4, 5, 6, 7, 8}  # 對應 _TABLE_COLUMNS 的索引
 
 
 def _table_row_html(r: dict) -> str:
@@ -319,9 +323,11 @@ def _table_row_html(r: dict) -> str:
         f'<span style="color:#e8590c;">⚠{caution}</span>' if caution else "－",
     ]
     tds = "".join(
-        f'<td style="padding:6px 8px;border:1px solid {HTML_TABLE_GRID};'
-        f'font-size:{HTML_BASE_FONT_PX}px;white-space:nowrap;">{c}</td>'
-        for c in cells
+        f'<td style="padding:5px 7px;border:1px solid {HTML_TABLE_GRID};'
+        f'font-size:{HTML_BASE_FONT_PX}px;'
+        + ("white-space:nowrap;" if i in _NOWRAP_COLS else "max-width:150px;")
+        + f'">{c}</td>'
+        for i, c in enumerate(cells)
     )
     return f"<tr>{tds}</tr>"
 

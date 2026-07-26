@@ -12,6 +12,10 @@ from portfolio import (
     build_report_context,
     weight,
     cost_weight,
+    current_price_display,
+    industry_or_sector_label_zh,
+    market_intel_highlight,
+    MAX_CARRYOVER_MONTHS,
 )
 from report import DISCLAIMER
 
@@ -85,22 +89,23 @@ def _sheet_overview(wb, holdings, ctx):
 
 def _sheet_fundamentals(wb, holdings):
     sheet = wb.create_sheet("個股分析")
-    headers = ["代號", "名稱", "產業", "本益比(TTM)", "本益比(預估)", "EPS(TTM)", "EPS(預估)", "法人目標價", "法人評等", "殖利率"]
+    headers = ["代號", "名稱", "產業", "本益比(TTM)", "本益比(預估)", "EPS(TTM)", "EPS(預估)", "目前股價", "法人目標價", "法人評等", "殖利率"]
     _write_header(sheet, 1, headers)
     for i, h in enumerate(holdings, start=2):
         sheet.cell(i, 1, h.code)
         sheet.cell(i, 2, h.name)
-        sheet.cell(i, 3, h.industry or h.sector or "N/A")
+        sheet.cell(i, 3, industry_or_sector_label_zh(h))
         sheet.cell(i, 4, h.trailing_pe)
         sheet.cell(i, 5, h.forward_pe)
         sheet.cell(i, 6, h.trailing_eps)
         sheet.cell(i, 7, h.forward_eps)
-        sheet.cell(i, 8, h.target_mean_price)
-        sheet.cell(i, 9, h.recommendation or "N/A")
-        c = sheet.cell(i, 10, h.dividend_yield)
+        sheet.cell(i, 8, current_price_display(h))
+        sheet.cell(i, 9, h.target_mean_price)
+        sheet.cell(i, 10, h.recommendation or "N/A")
+        c = sheet.cell(i, 11, h.dividend_yield)
         if h.dividend_yield:
             c.number_format = "0.00%"
-    _autofit(sheet, [10, 20, 16, 12, 12, 10, 10, 12, 12, 10])
+    _autofit(sheet, [10, 20, 16, 12, 12, 10, 10, 20, 12, 12, 10])
 
 
 def _sheet_text_list(wb, title, items, header="項目"):
@@ -111,6 +116,96 @@ def _sheet_text_list(wb, title, items, header="項目"):
         sheet.cell(i, 1).alignment = Alignment(wrap_text=True, vertical="top")
     _autofit(sheet, [100])
     return sheet
+
+
+def _sheet_buy_points(wb, buy_points_data: list[dict]):
+    sheet = wb.create_sheet("合理買點")
+    headers = ["代號", "名稱", "近一年區間", "建議承接區間", "現價位置", "法人目標價", "上漲空間"]
+    _write_header(sheet, 1, headers)
+    for i, bp in enumerate(buy_points_data, start=2):
+        sheet.cell(i, 1, bp["code"])
+        sheet.cell(i, 2, bp["name"])
+        sheet.cell(i, 3, bp.get("week52_range") or "N/A")
+        sheet.cell(i, 4, bp.get("suggested_zone") or "N/A")
+        sheet.cell(i, 5, bp.get("price_position") or "N/A")
+        sheet.cell(i, 5).alignment = Alignment(wrap_text=True)
+        sheet.cell(i, 6, bp.get("target_price"))
+        c = sheet.cell(i, 7, bp.get("upside_pct"))
+        c.number_format = "0.0%"
+    _autofit(sheet, [10, 20, 18, 18, 40, 14, 12])
+
+
+def _sheet_monthly_allocation(wb, data: dict):
+    """需求 6：優先購買清單＋資金分配改成表格分頁，總預算說明／尚未分配結轉／排除加碼說明
+    比照既有 `_sheet_sector_allocation()` 的「表格+文字說明」混合寫法，寫在表格上方／下方。"""
+    sheet = wb.create_sheet("每月投資建議")
+
+    if data.get("no_value_note"):
+        sheet.cell(1, 1, data["no_value_note"])
+        _autofit(sheet, [60])
+        return
+
+    amount = data["amount"]
+    carryover = data["carryover"]
+    total_budget = data["total_budget"]
+    budget_line = (
+        f"本月可投資金額：新台幣 {total_budget:,.0f} 元"
+        + (f"（月定期定額 {amount:,.0f} 元＋現金流結餘 {carryover:,.0f} 元，結轉上限 {data['carryover_cap']:,.0f} 元）" if carryover else f"（月定期定額 {amount:,.0f} 元）")
+    )
+    sheet.cell(1, 1, budget_line).font = Font(bold=True, size=12)
+    row = 3
+
+    if data.get("no_candidates_note"):
+        sheet.cell(row, 1, data["no_candidates_note"])
+        row += 1
+        for note in data.get("excluded_notes") or []:
+            sheet.cell(row, 1, note)
+            sheet.cell(row, 1).alignment = Alignment(wrap_text=True)
+            row += 1
+        _autofit(sheet, [100])
+        return
+
+    sheet.cell(row, 1, "優先購買清單（依 Investment Score／長期持股信心排序）").font = HEADER_FONT
+    row += 1
+    _write_header(sheet, row, ["順位", "代號", "名稱", "Investment Score", "長期信心"])
+    row += 1
+    for p in data["priority_list"]:
+        sheet.cell(row, 1, p["rank"])
+        sheet.cell(row, 2, p["code"])
+        sheet.cell(row, 3, p["name"])
+        sheet.cell(row, 4, round(p["investment_score"], 1) if p.get("investment_score") is not None else None)
+        sheet.cell(row, 5, p.get("conviction_stars", "N/A"))
+        row += 1
+
+    row += 1
+    sheet.cell(row, 1, "本月資金分配（集中在優先順序最前面的標的，不是每檔都買一點；資金用完或達上限為止）").font = HEADER_FONT
+    row += 1
+    _write_header(sheet, row, ["代號", "名稱", "投入金額", "買進階段", "本輪比例", "約可買股數", "備註"])
+    row += 1
+    for a in data["allocations"]:
+        sheet.cell(row, 1, a["code"])
+        sheet.cell(row, 2, a["name"])
+        sheet.cell(row, 3, a["amount"])
+        sheet.cell(row, 4, a["tier_label"])
+        c = sheet.cell(row, 5, a["tier_pct"])
+        c.number_format = "0%"
+        sheet.cell(row, 6, round(a["shares"], 1))
+        sheet.cell(row, 7, a.get("note") or "")
+        row += 1
+
+    row += 1
+    if data.get("remaining") is not None:
+        sheet.cell(row, 1, f"尚未分配：{data['remaining']:,.0f} 元，將結轉至下月（結轉上限：{MAX_CARRYOVER_MONTHS} 個月投入金額 {data['carryover_cap']:,.0f} 元）。")
+        row += 1
+    if data.get("no_allocation_note"):
+        sheet.cell(row, 1, data["no_allocation_note"])
+        row += 1
+    for note in data.get("excluded_notes") or []:
+        sheet.cell(row, 1, note)
+        sheet.cell(row, 1).alignment = Alignment(wrap_text=True)
+        row += 1
+
+    _autofit(sheet, [10, 20, 14, 20, 12, 14, 40])
 
 
 def _sheet_sector_allocation(wb, ctx):
@@ -228,7 +323,7 @@ def _sheet_candidate_watchlist(wb, candidates: list[dict], sheet_name: str = "�
 def _sheet_market_intel(wb, holdings, market_intel: dict):
     sheet = wb.create_sheet("市場情報")
     headers = [
-        "代號", "名稱", "月營收年增率", "最新季", "季營收(仟元)", "EPS(元)", "今日重大訊息則數", "下一場法說會",
+        "代號", "名稱", "重點摘要", "月營收年增率", "最新季", "季營收(仟元)", "EPS(元)", "今日重大訊息則數", "下一場法說會",
         "三大法人買賣超(股)", "外資買賣超", "投信買賣超", "自營商買賣超", "相關新聞1", "相關新聞2", "相關新聞3",
     ]
     _write_header(sheet, 1, headers)
@@ -243,25 +338,27 @@ def _sheet_market_intel(wb, holdings, market_intel: dict):
 
         sheet.cell(i, 1, h.code)
         sheet.cell(i, 2, h.name)
+        sheet.cell(i, 3, market_intel_highlight(info))
+        sheet.cell(i, 3).alignment = Alignment(wrap_text=True)
 
         yoy = rev.get("營業收入-去年同月增減(%)")
-        c = sheet.cell(i, 3, float(yoy) / 100 if yoy not in (None, "") else None)
+        c = sheet.cell(i, 4, float(yoy) / 100 if yoy not in (None, "") else None)
         c.number_format = "0.0%"
 
-        sheet.cell(i, 4, inc.get("quarter"))
-        sheet.cell(i, 5, float(inc["revenue"]) if inc.get("revenue") is not None else None)
-        sheet.cell(i, 6, float(inc["eps"]) if inc.get("eps") not in (None, "") else None)
-        sheet.cell(i, 7, len(material_news))
-        sheet.cell(i, 8, f"{conf['date']} {conf['time']}／{conf['location']}" if conf else None)
-        sheet.cell(i, 9, flow.get("total_net"))
-        sheet.cell(i, 10, flow.get("foreign_net"))
-        sheet.cell(i, 11, flow.get("trust_net"))
-        sheet.cell(i, 12, flow.get("dealer_net"))
+        sheet.cell(i, 5, inc.get("quarter"))
+        sheet.cell(i, 6, float(inc["revenue"]) if inc.get("revenue") is not None else None)
+        sheet.cell(i, 7, float(inc["eps"]) if inc.get("eps") not in (None, "") else None)
+        sheet.cell(i, 8, len(material_news))
+        sheet.cell(i, 9, f"{conf['date']} {conf['time']}／{conf['location']}" if conf else None)
+        sheet.cell(i, 10, flow.get("total_net"))
+        sheet.cell(i, 11, flow.get("foreign_net"))
+        sheet.cell(i, 12, flow.get("trust_net"))
+        sheet.cell(i, 13, flow.get("dealer_net"))
 
         for j, n in enumerate(news[:3]):
-            sheet.cell(i, 13 + j, n.get("title"))
+            sheet.cell(i, 14 + j, n.get("title"))
 
-    _autofit(sheet, [10, 20, 14, 10, 14, 10, 14, 30, 16, 14, 14, 14, 40, 40, 40])
+    _autofit(sheet, [10, 20, 30, 14, 10, 14, 10, 14, 30, 16, 14, 14, 14, 40, 40, 40])
 
 
 def generate_excel_report(path: str = EXCEL_REPORT_PATH, holdings=None, ctx=None) -> str:
@@ -276,11 +373,11 @@ def generate_excel_report(path: str = EXCEL_REPORT_PATH, holdings=None, ctx=None
     _sheet_overview(wb, holdings, ctx)
     _sheet_goal(wb, ctx.get("goal", {}))
     _sheet_fundamentals(wb, holdings)
-    _sheet_text_list(wb, "合理買點", ctx["buy_points"], header="合理買點說明")
+    _sheet_buy_points(wb, ctx.get("buy_points_data", []))
     _sheet_ai_scoring(wb, holdings, ctx.get("ai_scoring", {}))
     _sheet_sector_allocation(wb, ctx)
     _sheet_risk_rebalance(wb, ctx)
-    _sheet_text_list(wb, "每月投資建議", ctx["monthly_allocation"], header="本月定期定額建議")
+    _sheet_monthly_allocation(wb, ctx.get("monthly_allocation_data", {}))
     _sheet_text_list(wb, "追蹤重點", ctx["monthly_focus"], header="每月追蹤重點")
     _sheet_market_intel(wb, holdings, ctx.get("market_intel", {}))
     _sheet_candidate_watchlist(wb, ctx.get("candidate_watchlist", []))

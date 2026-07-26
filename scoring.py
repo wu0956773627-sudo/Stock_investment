@@ -35,7 +35,7 @@ from portfolio import (
 
 ALERT_STATE_PATH = "alert_state.json"
 QUIET_PERIOD_DAYS = 7
-EXTREME_LOSS_THRESHOLD = -0.70
+EXTREME_LOSS_THRESHOLD = -0.40  # 虧損達此門檻，除非出現重大利多/利空新聞，不再每天重複提醒（使用者依 1436/6550 兩檔實例將門檻從 -70% 下修至 -40%）
 CHASE_HIGH_THRESHOLD = 0.20  # 現價距合理價 ≥20% 視為追高
 OVERVALUED_THRESHOLD = 0.20  # 獲利部位現價超過合理價 20% 視為高估
 
