@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Claude Code 本機專屬設定（跟機器綁定，不共用）
+.claude/settings.local.json
+
 # 憑證與帳密（凱基 API 等）：絕對不可上傳
 .env
 .env.*
@@ -23,11 +26,11 @@ certs/
 
 # 個人持股與投資報告：屬個人財務資料，不上傳
 *.xlsx
-*.md
 !README.md
 !CLAUDE.md
 !專案進度.md
 投資報告.pdf
+投資報告.md
 
 # AI 綜合評分的通知節流狀態（記錄每檔持股上次提醒的訊號/日期），屬個人使用記錄，不上傳
 alert_state.json

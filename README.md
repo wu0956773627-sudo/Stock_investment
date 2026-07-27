@@ -66,7 +66,14 @@ uv run uvicorn app:app --reload
 - `generate_skills_doc.py`：讀取 `.claude/skills/*/SKILL.md` 重新產生 `技能清單.docx`，新增/修改技能後手動重跑。
 - `專案進度.md`：專案至今的執行步驟紀錄。
 
-## 凱基證券 API 串接（報價 + 庫存查詢）
+## 凱基證券 API 串接（已擱置，持股改為手動維護 Excel）
+
+**決定（2026-07-27）**：凱基 API 卡在憑證簽章 `ErrorCode 5010`（見下方疑難排解），且這組錯誤碼沒有公開文件，需要致電凱基技術支援才能繼續排查。使用者已確認**不再投入時間排查，持股異動改為手動更新 `個人持股明細.xlsx`**（`portfolio.py` 讀取的正是這份 Excel，本來就是目前唯一實際運作的方式）。
+
+`kgi_client.py`／`test_kgi_connection.py` 保留在專案裡當作**未串接、獨立於主流程之外**的工具（沒有任何報告／通知功能會呼叫它們），供之後若取得凱基技術支援的協助、想重新嘗試時使用；在那之前，**不需要主動回報凱基連線失敗或追問後續進度**，這不是待解決的待辦事項。下方的疑難排解紀錄予以保留，純供之後真的要重新嘗試時查閱。
+
+<details>
+<summary>展開：凱基 API 串接設定步驟與疑難排解紀錄（僅供之後重新嘗試時參考）</summary>
 
 1. 複製 `.env.example` 為 `.env`，填入身分證字號與密碼：
 
@@ -97,6 +104,39 @@ uv run uvicorn app:app --reload
 3. 重新執行 `uv run python test_kgi_connection.py`。
 
 若仍失敗，可改走手動註冊方式：下載 `TradeComExample_TSEC.zip`（https://www.kgieworld.com.tw/UpLoadFiles/eUpLoadFile/TradeComExample_TSEC.zip）解壓縮後，以**系統管理員身分**開啟命令提示字元，切換到解壓縮路徑的 `bin\Release`，執行 `regsvr32 KGICGCAPIATL2x64.dll`，看到「DllRegisterServer 成功」才算完成。這一步需要系統管理員權限與 GUI 安裝流程，請您本機自行完成；我這邊無法透過終端機直接幫您安裝或註冊系統元件。
+
+### 疑難排解：憑證與帳戶權限都確認無誤，卻卡在「連線超時，請檢查網路狀態」
+
+`test_kgi_connection.py` 執行到能取得 ranking token（`Successfully obtained ranking token`），代表憑證元件與帳密都正確；但接著若卡在：
+
+```
+[系統訊息] 路徑設定完成（環境=虛擬下單環境）。
+請確認該賬戶權限
+[系統訊息] 連線超時，請檢查網路狀態。
+AttributeError: 'TradeCom' object has no attribute 'FIsLogon'
+```
+
+且已致電凱基客服確認該身分證字號的帳號已開通 SUPER PY API／模擬交易權限，此時問題多半出在**網路連線層**，而非憑證或帳戶設定：
+
+- Ranking token 走的是一般 HTTPS，但實際交易連線（TradeCom）走的是另一組專屬連接埠，**企業網域網路的防火牆很常只放行前者、擋掉後者**。
+- **排除方法（已實測驗證）**：換一個非公司網路環境（例如手機熱點）重新執行 `uv run python test_kgi_connection.py`。**注意：若電腦同時連著公司網路（有線或 Wi-Fi）跟熱點，Windows 預設會選路由 Metric 較低的介面**（通常是公司的有線網路），熱點不會被實際使用，必須把公司網卡**停用**（設定 → 網路和網際網路 → 該網卡 → 停用；或系統管理員身分執行 `Set-NetIPInterface -InterfaceIndex <公司網卡Index> -InterfaceMetric 9999` 調降優先權），確認 `Get-NetConnectionProfile` 只剩熱點那條連線，才是真正乾淨的測試。
+- 實測結果：停用公司網卡、純走手機熱點後，連線成功通過（`OnConnected()` / `API 加載完成`），證實是**公司防火牆擋掉了 TradeCom 連線**。需洽凱基 API 客服取得需放行的網域／IP／連接埠清單，轉交公司 IT 開白名單。
+- 附帶一提：連線逾時發生時，`kgisuperpy` 套件本身沒有妥善處理這個例外，會直接對尚未初始化的物件取屬性而丟出 `AttributeError: 'TradeCom' object has no attribute 'FIsLogon'`，這是凱基官方套件的邊界情況未處理好，不是 `kgi_client.py` 的問題。
+
+### 疑難排解：連線層通過後，卡在「CGPureSign... Fail!! ErrorCode = 5010」
+
+網路連線問題排除後（`OnConnected()` 成功），若接著卡在：
+
+```
+[Login][CheckCAComponent] ok
+[Login][CheckCAInfo]...(身分證字號)
+CGPureSign... Fail!! ErrorCode = 5010
+[ERROR][Login][CheckCAInfo] faild ... (5010)
+```
+
+代表憑證元件本身註冊正常（`CheckCAComponent ok`），但用憑證做簽章驗證（`CGPureSign`）失敗。這是凱基內部專屬錯誤碼，沒有公開文件，可能原因包括本機安裝的 Servisign 憑證跟登入身分證字號不吻合、憑證過期，或憑證綁定的帳號跟目前使用的不同。請致電凱基 API 客服 (02)2389-0088 / 0800-085-005，直接提供「ErrorCode 5010」詢問。
+
+</details>
 
 ## 已實現的 v1.0 功能
 
@@ -338,11 +378,11 @@ LINE Notify 已於 2025/03/31 終止服務，改用官方替代方案 **LINE Mes
 
 ## 尚待補充 / 需要使用者提供的資源
 
-- **券商 API（v3.0）**：若要串接「券商API → 投資資料庫 → AI分析 → 每日/週報告」的理想架構，需要凱基證券（或其他券商）提供的官方 API 存取權限與金鑰，目前尚未取得。
+- **券商 API（v3.0，已擱置）**：卡在憑證簽章 `ErrorCode 5010`（無公開文件，需凱基技術支援協助），使用者已決定不再投入時間排查，持股異動改為手動維護 `個人持股明細.xlsx`。詳見上方「凱基證券 API 串接」段落。
 
 ## 未來版本規劃
 
 - v2.0：自動匯入 Excel
-- v3.0：串接凱基證券 API（程式已就緒，本機連線卡在未公開元件問題，見上方疑難排解）
+- v3.0：串接凱基證券 API（**已擱置**，持股改為手動維護 Excel，見上方「凱基證券 API 串接」段落）
 - v4.0：整合新聞、月營收、財報、法說會排程（**全部已實作**：月營收／財報／重大訊息／新聞／法說會排程）
 - v5.0：每日自動產生投資報告與提醒（**Email 通知＋LINE 通知＋每日 05:00 排程，全部已實作並驗證成功**）
