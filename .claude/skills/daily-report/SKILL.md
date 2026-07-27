@@ -14,8 +14,8 @@ model: haiku
 
 ## 執行步驟
 
-2. `uv run python daily_report.py`
-3. 執行成功後，依終端機輸出回報：Email 是否寄出（寄到哪個信箱）、LINE 是否有發送（若沒設定 token，說明是正常略過，不是失敗）。
+2. 寄送本身是使用者觸發這個技能時已經同意的操作，但等待寄信／LINE API 回應可能花一點時間。若使用者這回合還想在前台繼續做其他事，**用 Agent 工具背景執行**（`subagent_type: general-purpose`，`run_in_background: true`），派工內容為「在專案目錄執行 `uv run python daily_report.py`，回報完整終端機輸出」；若使用者明確想要「馬上等結果」，直接用 Bash 前台執行 `uv run python daily_report.py` 即可，不強制背景化。
+3. 背景任務回報完成後（或前台執行完成後），依終端機輸出回報：Email 是否寄出（寄到哪個信箱）、LINE 是否有發送（若沒設定 token，說明是正常略過，不是失敗）。
 4. 若失敗，把錯誤訊息原文回報給使用者，不要猜測原因亂改程式碼；常見原因是 Gmail 應用程式密碼失效（需重新產生）或網路問題。
 
 ## 注意事項

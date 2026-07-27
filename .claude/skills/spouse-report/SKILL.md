@@ -14,8 +14,8 @@ model: haiku
 
 ## 執行步驟
 
-2. `uv run python spouse_report.py`
-3. 執行成功後回報：已寄送至哪個信箱（`SPOUSE_EMAIL`），並告知使用者本人也會收到密件副本（BCC），對方看不到有副本。
+2. 寄送本身是使用者觸發這個技能時已經同意的操作，但等待寄信可能花一點時間。若使用者這回合還想在前台繼續做其他事，**用 Agent 工具背景執行**（`subagent_type: general-purpose`，`run_in_background: true`），派工內容為「在專案目錄執行 `uv run python spouse_report.py`，回報完整終端機輸出」；若使用者明確想要「馬上等結果」，直接用 Bash 前台執行 `uv run python spouse_report.py` 即可，不強制背景化。
+3. 背景任務回報完成後（或前台執行完成後），回報：已寄送至哪個信箱（`SPOUSE_EMAIL`），並告知使用者本人也會收到密件副本（BCC），對方看不到有副本。
 
 ## 隱私限制（務必遵守）
 

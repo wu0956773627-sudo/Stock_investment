@@ -16,7 +16,7 @@ model: opus
 
 ## 執行步驟
 
-4. `uv run python test_kgi_connection.py`
+4. 這個測試涉及外部網路連線（TradeCom／凱基伺服器），可能因防火牆或逾時卡住一段時間。若使用者想在等待期間繼續在前台做其他事，可以**用 Agent 工具背景執行**（`subagent_type: general-purpose`，`model: opus`，`run_in_background: true`），派工內容為「在專案目錄執行 `uv run python test_kgi_connection.py`，回報完整終端機輸出（含錯誤碼原文，不要摘要或改寫）」——背景 subagent 只負責回報原始輸出，實際判讀（是否為已知的 CGPureSign 卡點、還是全新錯誤）留到背景任務回報後、由目前這個對話（opus）來做，不要讓背景 subagent 自行下診斷結論。若使用者明確想要「馬上等結果」，直接用 Bash 前台執行 `uv run python test_kgi_connection.py` 即可，不強制背景化。
 5. 讀取輸出結果：
    - 若成功（能列出可用帳號／取得報價或庫存），恭喜使用者，並詢問是否要接著把 `kgi_client.py` 接進 `portfolio.py` 取代手動 Excel 維護（先確認連線測試成功再進行這步，不要在測試通過前就先動手改主要流程）。
    - 若卡在憑證簽章 `CGPureSign... Fail!! ErrorCode = 5010`：這是目前已知、尚未解決的卡點（無公開文件），直接說明「這個錯誤碼還沒解決，需要凱基技術支援協助」，不用重新從頭排查（網路、憑證元件註冊、帳戶權限都已排除過）。

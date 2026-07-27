@@ -145,6 +145,15 @@ def main():
     print(f"盤中觀察已寄出至 {SPOUSE_EMAIL}（BCC 給 {notify.EMAIL_TO}）")
     print(body)
 
+    # 盤中這兩次（09:35／11:30）寄信容易在背景排程悄悄失敗而不自知，
+    # 額外補一則 LINE 短通知，讓使用者確定信真的寄出去了。05:00 的 spouse_report.py（早上短線報告）不需要。
+    if notify.LINE_CHANNEL_ACCESS_TOKEN:
+        line_msg = f"【盤中觀察】{datetime.now().strftime('%H:%M')} 已寄出 email 給太太（BCC 給你）。"
+        notify.send_line_broadcast(line_msg)
+        print(f"已同步發送 LINE 通知：{line_msg}")
+    else:
+        print("尚未設定 LINE_CHANNEL_ACCESS_TOKEN，略過 LINE 通知。")
+
 
 if __name__ == "__main__":
     main()
