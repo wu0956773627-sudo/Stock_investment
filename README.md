@@ -380,6 +380,20 @@ LINE Notify 已於 2025/03/31 終止服務，改用官方替代方案 **LINE Mes
 
 - **券商 API（v3.0，已擱置）**：卡在憑證簽章 `ErrorCode 5010`（無公開文件，需凱基技術支援協助），使用者已決定不再投入時間排查，持股異動改為手動維護 `個人持股明細.xlsx`。詳見上方「凱基證券 API 串接」段落。
 
+### 待實驗：把寄信從 SMTP 改成 Gmail API（2026-07-27 記錄，尚未實作）
+
+**背景**：`notify.py` 目前用 `smtplib` 走 SMTP（587埠）寄信，公司網域網路會擋這個埠（但不會擋一般網頁瀏覽用的 HTTPS／443埠，這也是為什麼證交所 OpenAPI、yfinance 這些資料源在公司網路下都抓得到，只有寄信會卡）。若改用 Gmail API（本質是 HTTPS 443 埠的 REST API），理論上能在公司網路下直接寄信，不需要再切換手機熱點。使用者決定先不動 `notify.py`，之後自行實驗，這裡先記錄步驟：
+
+1. 前往 https://console.cloud.google.com/ 建立（或選用既有）專案。
+2. 「API 和服務」→「已啟用的 API 和服務」→ 搜尋並啟用 **Gmail API**。
+3. 「API 和服務」→「OAuth 同意畫面」→ 設定為「外部」＋測試模式，測試使用者填入自己的 Gmail 帳號（`EMAIL_ADDRESS` 那組）。
+4. 「API 和服務」→「憑證」→「建立憑證」→「OAuth 用戶端 ID」→ 應用程式類型選 **電腦版應用程式（Desktop app）** → 下載 `client_secret.json`，放在專案目錄（**務必確認會被 `.gitignore` 排除**，本專案 `.gitignore` 已有廣義 `*.json` 規則涵蓋，但下載後建議手動用 `git check-ignore -v client_secret.json` 再次確認）。
+5. 安裝套件：`uv add google-auth google-auth-oauthlib google-api-python-client`。
+6. 第一次執行時，程式呼叫 `google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(...)` 會跳出瀏覽器要求登入並授權，授權完成後會在本機存一份 `token.json`（含 refresh token，同樣要確認被 gitignore），之後重新執行不需要再登入，除非 token 失效或撤銷授權。
+7. 把 `notify.py` 的 `send_email()` 改成用 Gmail API：訊息一樣先組成 `email.message.EmailMessage`，但改成 base64url 編碼後透過 `googleapiclient.discovery.build("gmail", "v1", credentials=creds).users().messages().send(userId="me", body={"raw": encoded}).execute()` 寄出，取代原本的 `smtplib.SMTP(...)` 那段。
+
+**取捨**：一次性設定成本較高（要跑 Google Cloud Console 設定＋OAuth 授權流程），換來的是**以後在任何網路環境（含公司網路）都能直接寄信，不用再切換熱點／停用網卡**。
+
 ## 未來版本規劃
 
 - v2.0：自動匯入 Excel

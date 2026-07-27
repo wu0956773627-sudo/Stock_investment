@@ -128,7 +128,11 @@ def _holdings_table(holdings, total_value, total_cost) -> Table:
     for h in holdings:
         price = f"{h.price:,.2f}" if h.price is not None else "N/A"
         mv = f"{h.market_value:,.0f}" if h.market_value is not None else "N/A"
-        pnl = f"{h.pnl:,.0f}({h.pnl_pct:+.1%})" if h.pnl is not None and h.pnl_pct is not None else "N/A"
+        if h.pnl is not None and h.pnl_pct is not None:
+            pnl_color = "#c62828" if h.pnl >= 0 else "#2e7d32"  # 台股慣例：紅漲綠跌
+            pnl = f'<font color="{pnl_color}">{h.pnl:,.0f}({h.pnl_pct:+.1%})</font>'
+        else:
+            pnl = "N/A"
         w = weight(h, total_value)
         w_str = f"{w:.1%}" if w is not None else "N/A"
         rows.append([h.code, h.name, price, mv, pnl, w_str])
@@ -334,7 +338,8 @@ def build_pdf_flowables(holdings, ctx: dict) -> list:
     total_pnl_pct_str = f"{ctx['total_pnl_pct']:+.1%}" if ctx["total_pnl_pct"] is not None else "N/A"
     flow.append(_p(f"總成本：新台幣 {ctx['total_cost']:,.0f} 元", STYLE_BODY))
     flow.append(_p(f"總市值：新台幣 {ctx['total_value']:,.0f} 元", STYLE_BODY))
-    flow.append(_p(f"總報酬：新台幣 {ctx['total_pnl']:,.0f} 元（{total_pnl_pct_str}）", STYLE_BODY))
+    total_pnl_color = "#c62828" if (ctx["total_pnl"] or 0) >= 0 else "#2e7d32"  # 台股慣例：紅漲綠跌
+    flow.append(_p(f'總報酬：新台幣 <font color="{total_pnl_color}">{ctx["total_pnl"]:,.0f} 元（{total_pnl_pct_str}）</font>', STYLE_BODY))
     idx = ctx.get("market_index")
     if idx and idx.get("close") is not None:
         change_str = f"{idx['change_points']:+,.2f}（{idx['change_pct']:+.2f}%）" if idx.get("change_points") is not None else "N/A"

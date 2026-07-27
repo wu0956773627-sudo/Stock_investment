@@ -48,10 +48,14 @@ def _sheet_overview(wb, holdings, ctx):
     sheet["B4"] = ctx["total_cost"]
     sheet["A5"] = "總市值"
     sheet["B5"] = ctx["total_value"]
+    total_pnl_color = "C62828" if (ctx["total_pnl"] or 0) >= 0 else "2E7D32"  # 台股慣例：紅漲綠跌
+    total_pnl_font = Font(color=total_pnl_color)
     sheet["A6"] = "總報酬"
     sheet["B6"] = ctx["total_pnl"]
+    sheet["B6"].font = total_pnl_font
     sheet["A7"] = "總報酬率"
     sheet["B7"] = ctx["total_pnl_pct"]
+    sheet["B7"].font = total_pnl_font
     sheet["B7"].number_format = "0.0%"
 
     idx = ctx.get("market_index")
@@ -76,8 +80,12 @@ def _sheet_overview(wb, holdings, ctx):
         sheet.cell(i, 4, h.avg_cost)
         sheet.cell(i, 5, h.price)
         sheet.cell(i, 6, h.market_value)
-        sheet.cell(i, 7, h.pnl)
+        pnl_color = "C62828" if (h.pnl or 0) >= 0 else "2E7D32"  # 台股慣例：紅漲綠跌
+        pnl_font = Font(color=pnl_color)
+        c = sheet.cell(i, 7, h.pnl)
+        c.font = pnl_font
         c = sheet.cell(i, 8, h.pnl_pct)
+        c.font = pnl_font
         c.number_format = "0.0%"
         c = sheet.cell(i, 9, w)
         c.number_format = "0.0%"
