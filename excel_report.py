@@ -1,5 +1,6 @@
 """將投資報告輸出為 Excel（多工作表），對應 report.py 的固定格式八大區塊。"""
 
+from collections import Counter
 from datetime import datetime
 
 from openpyxl import Workbook
@@ -12,7 +13,7 @@ from portfolio import (
     build_report_context,
     weight,
     cost_weight,
-    current_price_display,
+    format_price_date,
     industry_or_sector_label_zh,
     market_intel_highlight,
     MAX_CARRYOVER_MONTHS,
@@ -21,7 +22,8 @@ from report import DISCLAIMER
 
 EXCEL_REPORT_PATH = "投資報告.xlsx"
 
-HEADER_FONT = Font(bold=True)
+HEADER_FONT = Font(bold=True, size=16)
+DETAIL_FONT_SIZE = 14
 
 
 def _write_header(sheet, row, headers):
@@ -34,6 +36,22 @@ def _write_header(sheet, row, headers):
 def _autofit(sheet, widths):
     for col, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(col)].width = width
+
+
+def _rescale_fonts(wb):
+    """全報表明細字體統一調成 14、標題（欄位表頭，HEADER_FONT）維持 16。
+    走訪每個分頁已使用的儲存格，跳過已經是標題大小（16）的儲存格，其餘一律改成 14，
+    同時保留原本的粗體／顏色設定（例如損益紅漲綠跌、合理買點的藍色粗體、大盤漲跌配色）。
+    """
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                font = cell.font
+                if font.size == 16:
+                    continue
+                cell.font = Font(bold=font.bold, italic=font.italic, underline=font.underline, color=font.color, size=DETAIL_FONT_SIZE)
 
 
 def _sheet_overview(wb, holdings, ctx):
@@ -70,6 +88,7 @@ def _sheet_overview(wb, holdings, ctx):
     headers = ["代號", "名稱", "股數", "平均成本", "現價", "市值", "損益", "損益率", "市值佔比", "成本佔比"]
     start_row = 9
     _write_header(sheet, start_row, headers)
+    sheet.freeze_panes = f"A{start_row + 1}"
 
     for i, h in enumerate(holdings, start=start_row + 1):
         w = weight(h, ctx["total_value"])
@@ -95,10 +114,22 @@ def _sheet_overview(wb, holdings, ctx):
     _autofit(sheet, [10, 20, 10, 10, 10, 12, 12, 10, 10, 10])
 
 
+def _price_date_header_label(holdings) -> str | None:
+    """取眾數（最常見的資料日期）當欄位標題的日期標籤，避免少數幾檔抓到不同日期就整欄跟著亂標。"""
+    dates = [h.price_date for h in holdings if h.price_date]
+    if not dates:
+        return None
+    most_common_raw = Counter(dates).most_common(1)[0][0]
+    return format_price_date(most_common_raw)
+
+
 def _sheet_fundamentals(wb, holdings):
     sheet = wb.create_sheet("個股分析")
-    headers = ["代號", "名稱", "產業", "本益比(TTM)", "本益比(預估)", "EPS(TTM)", "EPS(預估)", "目前股價", "法人目標價", "法人評等", "殖利率"]
+    date_label = _price_date_header_label(holdings)
+    price_header = f"目前股價({date_label})" if date_label else "目前股價"
+    headers = ["代號", "名稱", "產業", "本益比(TTM)", "本益比(預估)", "EPS(TTM)", "EPS(預估)", price_header, "法人目標價", "法人評等", "殖利率"]
     _write_header(sheet, 1, headers)
+    sheet.freeze_panes = "A2"
     for i, h in enumerate(holdings, start=2):
         sheet.cell(i, 1, h.code)
         sheet.cell(i, 2, h.name)
@@ -107,7 +138,7 @@ def _sheet_fundamentals(wb, holdings):
         sheet.cell(i, 5, h.forward_pe)
         sheet.cell(i, 6, h.trailing_eps)
         sheet.cell(i, 7, h.forward_eps)
-        sheet.cell(i, 8, current_price_display(h))
+        sheet.cell(i, 8, h.price)
         sheet.cell(i, 9, h.target_mean_price)
         sheet.cell(i, 10, h.recommendation or "N/A")
         c = sheet.cell(i, 11, h.dividend_yield)
@@ -116,26 +147,34 @@ def _sheet_fundamentals(wb, holdings):
     _autofit(sheet, [10, 20, 16, 12, 12, 10, 10, 20, 12, 12, 10])
 
 
-def _sheet_text_list(wb, title, items, header="項目"):
-    sheet = wb.create_sheet(title)
-    _write_header(sheet, 1, [header])
-    for i, item in enumerate(items, start=2):
-        sheet.cell(i, 1, item)
-        sheet.cell(i, 1).alignment = Alignment(wrap_text=True, vertical="top")
-    _autofit(sheet, [100])
-    return sheet
+RANGE_HIGHLIGHT_FONT = Font(bold=True, color="1864AB")  # 跟太太盤中觀察信件的股票代號同一套醒目藍
+
+# portfolio.buy_point_data() 的 price_position 是給 Markdown/PDF/網頁版看的完整句子；
+# Excel 表格欄位窄，只在這裡另外做簡述版，不動共用的資料函式（避免影響其他三種輸出格式）。
+_PRICE_POSITION_BRIEF = {
+    "現價已落在偏低區間，屬於合理承接位置": "偏低，可承接",
+    "現價高於偏低承接區間，建議等待拉回或分批布局": "偏高，待拉回或分批",
+    "尚無近一年價格區間資料，暫無法估算買點。": "無資料",
+}
+
+
+def _brief_price_position(text: str | None) -> str:
+    if not text:
+        return "N/A"
+    return _PRICE_POSITION_BRIEF.get(text, text)
 
 
 def _sheet_buy_points(wb, buy_points_data: list[dict]):
     sheet = wb.create_sheet("合理買點")
     headers = ["代號", "名稱", "近一年區間", "建議承接區間", "現價位置", "法人目標價", "上漲空間"]
     _write_header(sheet, 1, headers)
+    sheet.freeze_panes = "A2"
     for i, bp in enumerate(buy_points_data, start=2):
         sheet.cell(i, 1, bp["code"])
         sheet.cell(i, 2, bp["name"])
-        sheet.cell(i, 3, bp.get("week52_range") or "N/A")
-        sheet.cell(i, 4, bp.get("suggested_zone") or "N/A")
-        sheet.cell(i, 5, bp.get("price_position") or "N/A")
+        sheet.cell(i, 3, bp.get("week52_range") or "N/A").font = RANGE_HIGHLIGHT_FONT
+        sheet.cell(i, 4, bp.get("suggested_zone") or "N/A").font = RANGE_HIGHLIGHT_FONT
+        sheet.cell(i, 5, _brief_price_position(bp.get("price_position")))
         sheet.cell(i, 5).alignment = Alignment(wrap_text=True)
         sheet.cell(i, 6, bp.get("target_price"))
         c = sheet.cell(i, 7, bp.get("upside_pct"))
@@ -161,6 +200,7 @@ def _sheet_monthly_allocation(wb, data: dict):
         + (f"（月定期定額 {amount:,.0f} 元＋現金流結餘 {carryover:,.0f} 元，結轉上限 {data['carryover_cap']:,.0f} 元）" if carryover else f"（月定期定額 {amount:,.0f} 元）")
     )
     sheet.cell(1, 1, budget_line).font = Font(bold=True, size=12)
+    sheet.freeze_panes = "A2"
     row = 3
 
     if data.get("no_candidates_note"):
@@ -219,6 +259,7 @@ def _sheet_monthly_allocation(wb, data: dict):
 def _sheet_sector_allocation(wb, ctx):
     sheet = wb.create_sheet("產業配置建議")
     _write_header(sheet, 1, ["產業別", "佔投組市值比重"])
+    sheet.freeze_panes = "A2"
     row = 2
     for sector, w in ctx["sector_allocation"].items():
         sheet.cell(row, 1, sector)
@@ -240,6 +281,7 @@ def _sheet_sector_allocation(wb, ctx):
 def _sheet_risk_rebalance(wb, ctx):
     sheet = wb.create_sheet("風險評估與再平衡")
     sheet.cell(1, 1, "風險評估").font = HEADER_FONT
+    sheet.freeze_panes = "A2"
     row = 2
     for r in ctx["risk"]:
         sheet.cell(row, 1, r)
@@ -259,8 +301,9 @@ def _sheet_risk_rebalance(wb, ctx):
 
 def _sheet_ai_scoring(wb, holdings, ai_scoring: dict):
     sheet = wb.create_sheet("AI綜合評分")
-    headers = ["代號", "名稱", "訊號", "說明", "Investment Score", "Risk Score", "資料覆蓋率", "法人目標價", "合理價", "關鍵理由"]
+    headers = ["代號", "名稱", "訊號", "說明", "投資評分", "風險評分", "資料覆蓋率", "法人目標價", "合理價", "關鍵理由"]
     _write_header(sheet, 1, headers)
+    sheet.freeze_panes = "A2"
     for i, h in enumerate(holdings, start=2):
         r = ai_scoring.get(h.code) or {}
         sheet.cell(i, 1, h.code)
@@ -279,37 +322,11 @@ def _sheet_ai_scoring(wb, holdings, ai_scoring: dict):
     _autofit(sheet, [10, 20, 8, 50, 16, 12, 12, 14, 14, 60])
 
 
-def _sheet_goal(wb, goal: dict):
-    sheet = wb.create_sheet("個人目標追蹤")
-    sheet["A1"] = "個人短期目標追蹤"
-    sheet["A1"].font = Font(bold=True, size=14)
-    if not goal:
-        sheet["A3"] = "尚無目標資料。"
-        return
-
-    rows = [
-        ("目標期間", f"{goal['baseline_date']} ~ {goal['target_date']}"),
-        ("剩餘天數", goal["days_remaining"]),
-        ("基準總市值", goal["baseline_value"]),
-        ("獲利目標", goal["profit_target"]),
-        ("目前累積獲利", goal["current_pnl"]),
-        ("獲利達成率", goal.get("profit_progress_pct")),
-        ("進度評估", "符合預期" if goal.get("on_pace") else "落後預期"),
-        ("目前總市值", goal["current_value"]),
-        ("是否跌破基準下限", "是，已跌破！" if goal.get("floor_breached") else "否"),
-    ]
-    for i, (label, value) in enumerate(rows, start=3):
-        sheet.cell(i, 1, label)
-        c = sheet.cell(i, 2, value)
-        if label == "獲利達成率":
-            c.number_format = "0.0%"
-    _autofit(sheet, [18, 24])
-
-
 def _sheet_candidate_watchlist(wb, candidates: list[dict], sheet_name: str = "潛力新標的觀察"):
     sheet = wb.create_sheet(sheet_name)
     headers = ["價位帶", "代號", "名稱", "股價", "信心星等", "Investment Score", "Risk Score", "資料覆蓋率", "法人目標價", "關鍵理由"]
     _write_header(sheet, 1, headers)
+    sheet.freeze_panes = "A2"
     tier_label = {"high": "高價股", "low": "低價股"}
     for i, r in enumerate(candidates, start=2):
         sheet.cell(i, 1, tier_label.get(r.get("price_tier"), r.get("price_tier")))
@@ -335,6 +352,7 @@ def _sheet_market_intel(wb, holdings, market_intel: dict):
         "三大法人買賣超(股)", "外資買賣超", "投信買賣超", "自營商買賣超", "相關新聞1", "相關新聞2", "相關新聞3",
     ]
     _write_header(sheet, 1, headers)
+    sheet.freeze_panes = "A2"
     for i, h in enumerate(holdings, start=2):
         info = market_intel.get(h.code) or {}
         rev = info.get("monthly_revenue") or {}
@@ -379,22 +397,21 @@ def generate_excel_report(path: str = EXCEL_REPORT_PATH, holdings=None, ctx=None
 
     wb = Workbook()
     _sheet_overview(wb, holdings, ctx)
-    _sheet_goal(wb, ctx.get("goal", {}))
     _sheet_fundamentals(wb, holdings)
     _sheet_buy_points(wb, ctx.get("buy_points_data", []))
     _sheet_ai_scoring(wb, holdings, ctx.get("ai_scoring", {}))
     _sheet_sector_allocation(wb, ctx)
     _sheet_risk_rebalance(wb, ctx)
     _sheet_monthly_allocation(wb, ctx.get("monthly_allocation_data", {}))
-    _sheet_text_list(wb, "追蹤重點", ctx["monthly_focus"], header="每月追蹤重點")
     _sheet_market_intel(wb, holdings, ctx.get("market_intel", {}))
     _sheet_candidate_watchlist(wb, ctx.get("candidate_watchlist", []))
     _sheet_candidate_watchlist(wb, ctx.get("candidate_watchlist_etf", []), sheet_name="潛力新標的觀察(ETF)")
 
-    disclaimer_sheet = wb["追蹤重點"]
+    disclaimer_sheet = wb.worksheets[-1]
     last_row = disclaimer_sheet.max_row + 2
     disclaimer_sheet.cell(last_row, 1, DISCLAIMER).alignment = Alignment(wrap_text=True)
 
+    _rescale_fonts(wb)
     wb.save(path)
     return path
 
